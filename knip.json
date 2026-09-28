@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "index.html",
+    "src/board/index.ts",
+    "src/code-view/index.ts",
+    "src/editing/index.ts",
+    "src/rendering/frame-loop.ts",
+    "src/rendering/index.ts",
+    "src/workspace/index.ts"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx}",
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "*.config.{js,mjs,ts}"
+  ],
+  "ignore": ["tests/lint/fixtures/**"],
+  "ignoreDependencies": ["monaco-editor", "twgl.js", "@paulirish/trace_engine"]
+}

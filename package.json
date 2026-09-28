@@ -1,0 +1,57 @@
+{
+  "name": "code-canvas",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.7.1",
+  "lint-staged": {
+    "*.{js,mjs,cjs,ts,tsx,mts,cts}": [
+      "eslint --max-warnings=0 --no-warn-ignored"
+    ],
+    "*.{js,mjs,cjs,ts,tsx,mts,cts,json,css,glsl,yml,yaml}": [
+      "prettier --check"
+    ]
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm exec lint-staged && pnpm baseline:guard"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "pnpm typecheck && vite build",
+    "fixtures": "tsx fixtures/generate.ts",
+    "baseline:guard": "node --import tsx/esm scripts/guard-baseline.ts",
+    "check": "pnpm typecheck && pnpm lint && pnpm check-max-lines && pnpm format:check && pnpm knip && pnpm test",
+    "check-max-lines": "node --import tsx/esm scripts/check-max-lines.ts",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "knip": "knip",
+    "lint": "eslint . --max-warnings 0",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "prepare": "simple-git-hooks",
+    "validate": "pnpm check",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@paulirish/trace_engine": "^0.0.65",
+    "@playwright/test": "^1.55.0",
+    "eslint": "^9.39.1",
+    "eslint-plugin-boundaries": "^7.1.0",
+    "eslint-plugin-import-x": "^4.16.1",
+    "knip": "^5.82.1",
+    "lint-staged": "^16.2.1",
+    "prettier": "^3.8.1",
+    "simple-git-hooks": "^2.11.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.4",
+    "vite": "^6.4.2",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "monaco-editor": "^0.57.0",
+    "twgl.js": "^7.0.0"
+  }
+}

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+fixtures/reference-dataset/
+perf/results/
+coverage/
+test-results/
+playwright-report/
+openspec/
+docs/
+*.md
+pnpm-lock.yaml
