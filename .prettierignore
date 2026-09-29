@@ -1,6 +1,7 @@
 node_modules/
 dist/
 fixtures/reference-dataset/
+fixtures/edge-case-corpus/
 perf/results/
 coverage/
 test-results/

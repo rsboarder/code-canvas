@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spike C — Monaco editing swap</title>
+    <!-- No favicon file exists; without this, Chrome auto-requests
+         /favicon.ico and it 404s. An empty data URI suppresses that request
+         entirely — a candidate fix for round 3's reported 404 pending
+         confirmation from the next headed run's improved PAGE: diagnostics. -->
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, sans-serif;
+        background: #11151c;
+        color: #dce4ef;
+      }
+
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+
+      #canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+
+      #widget-body,
+      #monaco {
+        position: fixed;
+        left: 40px;
+        top: 260px;
+        width: calc(100vw - 80px);
+        height: 600px;
+        box-sizing: border-box;
+      }
+
+      #widget-body {
+        border: 1px solid #3c4657;
+        pointer-events: none;
+      }
+
+      #monaco {
+        display: none;
+        z-index: 2;
+        border: 1px solid #3c4657;
+      }
+
+      #monaco.capture-clean .cursor {
+        visibility: hidden !important;
+      }
+
+      #hud {
+        position: fixed;
+        z-index: 3;
+        top: 12px;
+        left: 12px;
+        width: min(560px, calc(100vw - 24px));
+        padding: 10px 12px;
+        border: 1px solid #354255;
+        border-radius: 8px;
+        background: rgb(17 21 28 / 94%);
+        box-shadow: 0 8px 30px rgb(0 0 0 / 30%);
+        font-size: 12px;
+      }
+
+      #hud h1 {
+        margin: 0 0 6px;
+        font-size: 15px;
+      }
+
+      #status {
+        min-height: 30px;
+        color: #9fb7d3;
+        white-space: pre-wrap;
+      }
+
+      #copy-results {
+        margin: 6px 0;
+        padding: 5px 8px;
+        color: #e8eef7;
+        border: 1px solid #52637c;
+        border-radius: 4px;
+        background: #263247;
+        cursor: pointer;
+      }
+
+      #enter-editing,
+      #exit-editing {
+        margin-right: 5px;
+        padding: 4px 7px;
+        color: #e8eef7;
+        border: 1px solid #52637c;
+        border-radius: 4px;
+        background: #263247;
+        cursor: pointer;
+      }
+
+      #results {
+        max-height: 115px;
+        overflow: auto;
+        margin: 0;
+        white-space: pre-wrap;
+        font:
+          11px ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas" aria-label="WebGL code widget"></canvas>
+    <div id="widget-body" aria-label="WebGL widget body"></div>
+    <div id="monaco" aria-label="Monaco editor"></div>
+    <section id="hud" aria-live="polite">
+      <h1>Spike C — entering and exiting Monaco editing</h1>
+      <div id="status">Loading the Reference Dataset…</div>
+      <button id="enter-editing" type="button">Enter editing</button>
+      <button id="exit-editing" type="button">Exit editing</button>
+      <button id="copy-results" type="button">Copy results as JSON</button>
+      <pre id="results">No measurements yet.</pre>
+    </section>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

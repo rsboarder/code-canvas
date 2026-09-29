@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spike A — frame and input probe</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #111827;
+        color: #e5e7eb;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+      }
+
+      main {
+        box-sizing: border-box;
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 20px;
+      }
+
+      p {
+        color: #9ca3af;
+        line-height: 1.5;
+      }
+
+      .controls,
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 10px;
+        margin: 18px 0;
+      }
+
+      button {
+        min-height: 40px;
+        border: 1px solid #4b5563;
+        border-radius: 6px;
+        background: #1f2937;
+        color: #f9fafb;
+        cursor: pointer;
+        font: inherit;
+        padding: 8px 12px;
+        text-align: left;
+      }
+
+      button:hover {
+        background: #374151;
+      }
+
+      .metric {
+        border: 1px solid #374151;
+        border-radius: 6px;
+        padding: 10px;
+      }
+
+      .metric span {
+        display: block;
+        color: #9ca3af;
+        font-size: 12px;
+        margin-bottom: 5px;
+      }
+
+      .metric output {
+        font-size: 18px;
+      }
+
+      pre {
+        max-height: 360px;
+        overflow: auto;
+        border: 1px solid #374151;
+        border-radius: 6px;
+        background: #0b1220;
+        padding: 12px;
+        white-space: pre-wrap;
+      }
+
+      #status {
+        color: #93c5fd;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Spike A — frame and input probe</h1>
+      <p>
+        This page keeps a continuous unloaded requestAnimationFrame loop while
+        recording. Use the controls for automated or manual runs, then copy the
+        input stream as JSON.
+      </p>
+
+      <div class="controls">
+        <button id="toggle-frame-log" type="button">Start frame log</button>
+        <button id="reset-frame-log" type="button">Reset frame log</button>
+        <button id="toggle-input-recorder" type="button">
+          Start input recorder
+        </button>
+        <button id="copy-input" type="button">
+          Copy input results as JSON
+        </button>
+        <button id="fullscreen" type="button">Enter fullscreen</button>
+        <button id="toggle-busy" type="button">Busy loop: off</button>
+      </div>
+
+      <section class="stats" aria-label="Frame statistics">
+        <div class="metric">
+          <span>Frame log</span><output id="frame-state">stopped</output>
+        </div>
+        <div class="metric">
+          <span>Samples</span><output id="sample-count">0</output>
+        </div>
+        <div class="metric">
+          <span>Estimated refresh</span><output id="refresh-rate">n/a</output>
+        </div>
+        <div class="metric">
+          <span>Interval p50</span><output id="p50">n/a</output>
+        </div>
+        <div class="metric">
+          <span>Interval p95</span><output id="p95">n/a</output>
+        </div>
+        <div class="metric">
+          <span>Interval p99</span><output id="p99">n/a</output>
+        </div>
+        <div class="metric">
+          <span>Intervals &gt; 12.5 ms / last minute</span
+          ><output id="long-intervals">0</output>
+        </div>
+        <div class="metric">
+          <span>Recorded input events</span><output id="event-count">0</output>
+        </div>
+      </section>
+
+      <p id="status" role="status">Ready.</p>
+      <pre id="event-preview">No input events recorded.</pre>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

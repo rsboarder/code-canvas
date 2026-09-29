@@ -13,13 +13,14 @@
     ]
   },
   "simple-git-hooks": {
-    "pre-commit": "pnpm exec lint-staged && pnpm baseline:guard"
+    "pre-commit": "pnpm exec lint-staged && pnpm typecheck && pnpm baseline:guard"
   },
   "scripts": {
     "dev": "vite",
     "build": "pnpm typecheck && vite build",
     "fixtures": "tsx fixtures/generate.ts",
     "baseline:guard": "node --import tsx/esm scripts/guard-baseline.ts",
+    "baseline:guard:ci": "node --import tsx/esm scripts/guard-baseline.ts --ci",
     "check": "pnpm typecheck && pnpm lint && pnpm check-max-lines && pnpm format:check && pnpm knip && pnpm test",
     "check-max-lines": "node --import tsx/esm scripts/check-max-lines.ts",
     "format": "prettier . --write",
@@ -31,7 +32,7 @@
     "test:e2e": "playwright test",
     "prepare": "simple-git-hooks",
     "validate": "pnpm check",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p spikes/tsconfig.json --noEmit && tsc -p tsconfig.domain.json --noEmit"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
@@ -40,6 +41,7 @@
     "eslint": "^9.39.1",
     "eslint-plugin-boundaries": "^7.1.0",
     "eslint-plugin-import-x": "^4.16.1",
+    "eslint-import-resolver-typescript": "^4.4.4",
     "knip": "^5.82.1",
     "lint-staged": "^16.2.1",
     "prettier": "^3.8.1",
@@ -52,6 +54,10 @@
   },
   "dependencies": {
     "monaco-editor": "^0.57.0",
-    "twgl.js": "^7.0.0"
+    "tm-grammars": "^1.32.22",
+    "tm-themes": "^1.12.12",
+    "twgl.js": "^7.0.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
   }
 }

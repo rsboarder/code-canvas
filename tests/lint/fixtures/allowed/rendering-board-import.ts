@@ -1,1 +1,1 @@
-import "../../tests/lint/fixtures/src/board/index";
+import "../board/index";

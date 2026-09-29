@@ -106,6 +106,16 @@ _Avoid_: test machine
 **Reference Dataset**:
 A deterministically generated set of 200 Source Files of 2000 lines each — the worst case for measurements.
 
+**Edge-case Corpus**:
+A small set of Source Files with the unusual text the Reference Dataset does not contain (different line endings, a byte-order mark, blank lines, empty files, very long lines, wide characters); used to check correctness, not speed.
+_Avoid_: test files, fixtures (without qualification)
+
+**Frame Stage**:
+One named step of a frame, performed in a fixed order every frame (for example: apply input, update the Camera, cull, draw).
+
+**Frame Sample**:
+What one frame measured: the time of each Frame Stage, the Detail Level, how many Widgets were visible, and how much text work was still waiting.
+
 **Noise Floor**:
 The number of dropped and partially presented frames and long intervals on a blank page in the same measurement session; the level below which stalls are not attributed to the application.
 _Avoid_: baseline (that's the name for a stored result from a past run)

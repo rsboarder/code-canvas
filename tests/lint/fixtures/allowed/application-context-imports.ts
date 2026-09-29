@@ -1,2 +1,3 @@
-import "../../../tests/lint/fixtures/src/board/domain/value";
-import "../../../tests/lint/fixtures/src/workspace/index";
+import "../domain/target";
+import "../../shared/domain/target";
+import "../../workspace/index";

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spike F — File System Access</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Spike F — File System Access</h1>
+      <p id="support-status">Checking File System Access API support…</p>
+
+      <section class="panel">
+        <h2>Folder and scan</h2>
+        <div class="controls">
+          <button id="pick-folder" type="button">Pick folder</button>
+          <button id="scan-folder" type="button">Scan folder</button>
+          <button id="read-all" type="button">Read all</button>
+        </div>
+        <p id="folder-status">No folder selected.</p>
+        <label for="file-select">File for edit/conflict check</label>
+        <select
+          id="file-select"
+          aria-label="File for edit/conflict check"
+        ></select>
+      </section>
+
+      <section class="panel">
+        <h2>Write conflict</h2>
+        <p>
+          Prepare a baseline, change that file in an external editor, then click
+          Edit + Save. Without an external change, the spike appends one comment
+          line and writes it.
+        </p>
+        <div class="controls">
+          <button id="prepare-conflict" type="button">
+            Prepare conflict check
+          </button>
+          <button id="edit-save" type="button">Edit + Save one file</button>
+        </div>
+        <p id="conflict-status">No save baseline prepared.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Persistence and permissions</h2>
+        <div class="controls">
+          <button id="store-handle" type="button">Store handle</button>
+          <button id="restore-handle" type="button">
+            Restore handle and read again
+          </button>
+          <button id="repick-compare" type="button">
+            Re-pick and compare identity
+          </button>
+        </div>
+        <p>
+          Restore is deliberately a button action so requestPermission, if
+          needed, has a user gesture. Use the manual checklist in the report for
+          reload, browser restart, persistent permission, and revocation.
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>Results</h2>
+        <div class="controls">
+          <button id="copy-results" type="button">Copy results as JSON</button>
+          <button id="clear-log" type="button">Clear log</button>
+        </div>
+        <pre id="log" aria-live="polite"></pre>
+      </section>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -23,14 +23,11 @@
     "noFallthroughCasesInSwitch": true,
     "moduleDetection": "force"
   },
-  "include": [
-    "src",
-    "perf",
-    "fixtures",
-    "tests",
-    "spikes",
-    "scripts",
-    "*.config.ts"
-  ],
-  "exclude": ["fixtures/reference-dataset"]
+  "include": ["src", "perf", "fixtures", "tests", "scripts", "*.config.ts"],
+  "exclude": [
+    "fixtures/reference-dataset",
+    "fixtures/edge-case-corpus",
+    "tests/lint/fixtures/**",
+    "spikes/**"
+  ]
 }

@@ -7,6 +7,7 @@ perf/results/
 .cdx-tmp/
 .DS_Store
 fixtures/reference-dataset/
+fixtures/edge-case-corpus/
 spikes/*/results/
 .cdx-papercuts.jsonl
 .omo/

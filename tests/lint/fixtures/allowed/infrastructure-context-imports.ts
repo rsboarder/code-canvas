@@ -1,2 +1,2 @@
-import "../../../tests/lint/fixtures/src/board/application/service";
-import "../../../tests/lint/fixtures/src/board/domain/value";
+import "../application/target";
+import "../domain/target";

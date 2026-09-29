@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2020"],
+    "types": []
+  },
+  "include": [
+    "src/*/domain/**/*.ts",
+    "src/shared/domain/**/*.ts",
+    "src/shared/geometry/**/*.ts"
+  ],
+  "files": ["src/vite-env.d.ts"],
+  "exclude": ["tests/lint/fixtures/**"]
+}

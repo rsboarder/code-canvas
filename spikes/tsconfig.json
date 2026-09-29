@@ -1,0 +1,8 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "allowJs": false
+  },
+  "include": ["./**/*.ts", "../src/vite-env.d.ts"],
+  "exclude": ["../fixtures/reference-dataset", "../fixtures/edge-case-corpus"]
+}

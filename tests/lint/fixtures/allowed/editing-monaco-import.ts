@@ -1,3 +1,5 @@
 import * as monaco from "monaco-editor";
 
-void monaco;
+const editor = import("monaco-editor/editor/editor.api.js");
+
+export { monaco, editor };

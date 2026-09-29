@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spike B — WebGL2 glyph atlas</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, sans-serif;
+        background: #11151c;
+        color: #dce4ef;
+      }
+
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+
+      #glyph-canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+
+      #hud {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        width: min(470px, calc(100vw - 24px));
+        max-height: calc(100vh - 24px);
+        overflow: auto;
+        padding: 12px;
+        border: 1px solid #354255;
+        border-radius: 8px;
+        background: rgb(17 21 28 / 92%);
+        box-shadow: 0 8px 30px rgb(0 0 0 / 30%);
+        font-size: 12px;
+      }
+
+      #hud h1 {
+        margin: 0 0 8px;
+        font-size: 15px;
+      }
+
+      #status {
+        min-height: 32px;
+        color: #9fb7d3;
+        white-space: pre-wrap;
+      }
+
+      #copy-results {
+        margin: 8px 0;
+        padding: 5px 8px;
+        color: #e8eef7;
+        border: 1px solid #52637c;
+        border-radius: 4px;
+        background: #263247;
+        cursor: pointer;
+      }
+
+      #results {
+        margin: 0;
+        white-space: pre-wrap;
+        font:
+          11px ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+      }
+
+      #monaco {
+        width: 430px;
+        height: 230px;
+        margin-top: 8px;
+        border: 1px solid #354255;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="glyph-canvas" aria-label="WebGL glyph atlas spike"></canvas>
+    <section id="hud" aria-live="polite">
+      <h1>Spike B — WebGL2 alpha-only glyph atlas</h1>
+      <div id="status">Loading the Reference Dataset…</div>
+      <button id="copy-results" type="button">Copy results as JSON</button>
+      <pre id="results">No measurements yet.</pre>
+      <div id="monaco" aria-label="Monaco cross-check"></div>
+    </section>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

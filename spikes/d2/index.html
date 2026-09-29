@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spike D2 — TextMate tokenization in a worker</title>
+    <!-- Empty data-URI favicon: eliminates the browser's automatic
+         /favicon.ico request, the likely (unconfirmed) source of the
+         single 404 seen on the reference Chrome run. -->
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      body {
+        background: #1e1e1e;
+        color: #d4d4d4;
+        margin: 24px;
+        max-width: 1180px;
+      }
+      button {
+        background: #0e639c;
+        border: 0;
+        color: white;
+        cursor: pointer;
+        margin-right: 8px;
+        padding: 8px 12px;
+      }
+      button:disabled {
+        cursor: wait;
+        opacity: 0.6;
+      }
+      pre {
+        background: #252526;
+        border: 1px solid #3f3f46;
+        padding: 12px;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Spike D2 — TextMate TypeScript/TSX tokenization in a Web Worker</h1>
+    <p>
+      vscode-textmate and vscode-oniguruma tokenize the Reference Dataset in a
+      worker. Monaco uses the same grammar and encoded theme color map for the
+      comparison.
+    </p>
+    <p>
+      <button id="run-sample" type="button">Run one 2000-line file</button>
+      <button id="run-dataset" type="button">
+        Run Reference Dataset (200 files)
+      </button>
+      <button id="copy-results" type="button">Copy results as JSON</button>
+    </p>
+    <pre id="status">Idle.</pre>
+    <pre id="results">No results yet.</pre>
+    <div
+      id="monaco-sample-container"
+      style="
+        width: 640px;
+        height: 320px;
+        border: 1px solid #3f3f46;
+        margin-top: 12px;
+      "
+    ></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

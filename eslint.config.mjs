@@ -1,231 +1,34 @@
 import eslint from "@eslint/js";
 import boundaries from "eslint-plugin-boundaries";
+import { createTypeScriptImportResolver } from "eslint-import-resolver-typescript";
 import importX from "eslint-plugin-import-x";
+import { fileURLToPath, URL } from "node:url";
 import tseslint from "typescript-eslint";
+import {
+  MAX_SOURCE_LINES,
+  boundaryRules,
+  boundarySettings,
+  libraryRules,
+  moduleMap,
+} from "./scripts/module-map.mjs";
 
-const boundaryElements = [
-  { type: "domain", pattern: "src/*/domain", capture: ["context"] },
-  {
-    type: "application",
-    pattern: "src/*/application",
-    capture: ["context"],
-  },
-  {
-    type: "infrastructure",
-    pattern: "src/*/infrastructure",
-    capture: ["context"],
-  },
-  {
-    type: "index",
-    pattern: "src/*/index",
-    capture: ["context"],
-  },
-  { type: "shared", pattern: "src/shared" },
-  { type: "app", pattern: "src/app" },
-  { type: "rendering", pattern: "src/rendering" },
-  { type: "interaction", pattern: "src/interaction" },
-  { type: "performance", pattern: "src/performance" },
-];
-
-const sameContext = { context: "{{ from.element.captured.context }}" };
-const sameFileContext = { context: "{{ from.file.captured.context }}" };
-
-const boundaryRules = {
-  "boundaries/dependencies": [
-    "error",
-    {
-      default: "disallow",
-      policies: [
-        {
-          from: { element: { type: "domain" } },
-          allow: {
-            to: {
-              element: [
-                { type: "domain", captured: { context: "shared" } },
-                { type: "shared", fileInternalPath: "geometry/**" },
-              ],
-            },
-          },
-        },
-        {
-          from: { element: { type: "application" } },
-          allow: {
-            to: {
-              element: [
-                { type: "domain", captured: sameContext },
-                { type: "shared" },
-                { type: "index" },
-              ],
-            },
-          },
-        },
-        {
-          from: { element: { type: "application" } },
-          allow: { to: { file: { categories: "index" } } },
-        },
-        {
-          from: { element: { type: "infrastructure" } },
-          allow: {
-            to: {
-              element: [
-                { type: "domain", captured: sameContext },
-                { type: "application", captured: sameContext },
-                { type: "shared" },
-              ],
-            },
-          },
-        },
-        {
-          from: { element: { type: "index" } },
-          allow: {
-            to: {
-              element: [
-                { type: "domain", captured: sameContext },
-                { type: "application", captured: sameContext },
-                { type: "shared" },
-              ],
-            },
-          },
-        },
-        {
-          from: { file: { categories: "index" } },
-          allow: {
-            to: {
-              element: [
-                { type: "domain", captured: sameFileContext },
-                { type: "application", captured: sameFileContext },
-                { type: "shared" },
-              ],
-            },
-          },
-        },
-        {
-          from: { element: { type: "shared" } },
-          allow: { to: { element: { type: "shared" } } },
-        },
-        {
-          from: { element: { type: "app" } },
-          allow: {
-            to: {
-              element: {
-                types: {
-                  anyOf: [
-                    "domain",
-                    "application",
-                    "infrastructure",
-                    "index",
-                    "shared",
-                    "rendering",
-                    "interaction",
-                    "performance",
-                  ],
-                },
-              },
-            },
-          },
-        },
-        {
-          from: { element: { type: "app" } },
-          allow: { to: { file: { categories: "index" } } },
-        },
-        {
-          from: { element: { type: "rendering" } },
-          allow: {
-            to: {
-              element: { types: { anyOf: ["rendering", "shared"] } },
-            },
-          },
-        },
-        {
-          from: { element: { type: "rendering" } },
-          allow: { to: { file: { categories: "index" } } },
-        },
-        {
-          from: { element: { type: "interaction" } },
-          allow: {
-            to: {
-              element: { types: { anyOf: ["interaction", "shared", "index"] } },
-            },
-          },
-        },
-        {
-          from: { element: { type: "interaction" } },
-          allow: { to: { file: { categories: "index" } } },
-        },
-        {
-          from: { element: { type: "performance" } },
-          allow: {
-            to: {
-              element: { types: { anyOf: ["performance", "shared"] } },
-            },
-          },
-        },
-        {
-          from: {
-            element: {
-              types: {
-                noneOf: ["app"],
-              },
-            },
-          },
-          disallow: { to: { element: { type: "infrastructure" } } },
-        },
-        {
-          from: {
-            element: {
-              types: {
-                anyOf: ["infrastructure", "app"],
-              },
-            },
-          },
-          allow: { to: { module: { origin: "external" } } },
-        },
-      ],
-    },
-  ],
-};
-
-const restrictedLibraryImports = [
-  {
-    group: ["monaco-editor", "monaco-editor/**"],
-    message:
-      "monaco-editor is allowed only in editing/code-view infrastructure.",
-  },
-  {
-    group: ["twgl.js", "twgl.js/**"],
-    message: "twgl.js is allowed only in rendering.",
-  },
-];
-
-const domGlobals = [
-  "window",
-  "document",
-  "navigator",
-  "HTMLElement",
-  "Element",
-  "Node",
-  "requestAnimationFrame",
-  "cancelAnimationFrame",
-  "fetch",
-  "WebGL2RenderingContext",
-  "WebGLRenderingContext",
-  "OffscreenCanvas",
-  "CanvasRenderingContext2D",
-  "Event",
-  "CustomEvent",
-  "MutationObserver",
-  "ResizeObserver",
-  "IntersectionObserver",
-  "localStorage",
-  "sessionStorage",
-];
+const configRoot = import.meta.dirname;
+const tsconfigPath = fileURLToPath(new URL("./tsconfig.json", import.meta.url));
+const spikesTsconfigPath = fileURLToPath(
+  new URL("./spikes/tsconfig.json", import.meta.url),
+);
+const libraries = libraryRules();
 
 const sizeRules = {
   complexity: ["error", 15],
   "max-depth": ["error", 4],
   "max-lines": [
     "error",
-    { max: 800, skipBlankLines: false, skipComments: false },
+    {
+      max: MAX_SOURCE_LINES,
+      skipBlankLines: false,
+      skipComments: false,
+    },
   ],
   "max-lines-per-function": ["error", 80],
   "max-params": ["error", 4],
@@ -237,6 +40,7 @@ export default tseslint.config(
       "dist/**",
       "node_modules/**",
       "fixtures/reference-dataset/**",
+      "fixtures/edge-case-corpus/**",
       "perf/results/**",
       "coverage/**",
       "test-results/**",
@@ -251,22 +55,27 @@ export default tseslint.config(
     files: ["**/*.{js,mjs,cjs,ts,tsx,mts,cts}"],
     plugins: { boundaries, "import-x": importX },
     settings: {
-      "boundaries/elements": boundaryElements,
-      "boundaries/files": [
-        {
-          category: "index",
-          pattern: "src/*/index.ts",
-          capture: ["context"],
-        },
+      ...boundarySettings(),
+      "boundaries/root-path": configRoot,
+      "boundaries/include": [
+        "**/src/**/*",
+        "**/perf/**/*",
+        "**/spikes/**/*",
+        "**/fixtures/**/*",
+        "**/tests/**/*",
       ],
-      "boundaries/include": ["src/**/*"],
       "import/resolver": {
+        typescript: { project: [tsconfigPath, spikesTsconfigPath] },
         node: { extensions: [".js", ".mjs", ".ts", ".tsx"] },
       },
+      "import-x/resolver-next": [
+        createTypeScriptImportResolver({ project: tsconfigPath }),
+      ],
+      "import-x/extensions": [".js", ".mjs", ".cjs", ".ts", ".tsx"],
     },
     rules: {
       ...sizeRules,
-      ...boundaryRules,
+      ...boundaryRules(),
       "import-x/no-cycle": "error",
     },
   },
@@ -275,7 +84,7 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: {
         projectService: true,
-        tsconfigRootDir: import.meta.dirname,
+        tsconfigRootDir: configRoot,
       },
     },
   },
@@ -298,7 +107,7 @@ export default tseslint.config(
     rules: {
       "no-restricted-imports": [
         "error",
-        { patterns: restrictedLibraryImports },
+        { patterns: libraries.restrictedPatterns },
       ],
       "no-restricted-properties": [
         "error",
@@ -310,30 +119,20 @@ export default tseslint.config(
           property: "outerHTML",
           message: "Use textContent instead of outerHTML.",
         },
+        {
+          property: "insertAdjacentHTML",
+          message: "Use DOM APIs that do not parse HTML strings.",
+        },
+        {
+          object: "document",
+          property: "write",
+          message: "Use DOM APIs instead of document.write.",
+        },
       ],
+      "no-restricted-syntax": ["error", ...libraries.dynamicRules],
     },
   },
-  {
-    files: [
-      "src/editing/infrastructure/**/*.{js,mjs,cjs,ts,tsx,mts,cts}",
-      "src/code-view/infrastructure/**/*.{js,mjs,cjs,ts,tsx,mts,cts}",
-    ],
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        { patterns: [restrictedLibraryImports[1]] },
-      ],
-    },
-  },
-  {
-    files: ["src/rendering/**/*.{js,mjs,cjs,ts,tsx,mts,cts}"],
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        { patterns: [restrictedLibraryImports[0]] },
-      ],
-    },
-  },
+  ...libraries.areas,
   {
     files: [
       "src/*/domain/**/*.{js,mjs,cjs,ts,tsx,mts,cts}",
@@ -341,7 +140,7 @@ export default tseslint.config(
       "src/shared/geometry/**/*.{js,mjs,cjs,ts,tsx,mts,cts}",
     ],
     rules: {
-      "no-restricted-globals": ["error", ...domGlobals],
+      "no-restricted-globals": ["error", ...moduleMap.domGlobals],
     },
   },
 );

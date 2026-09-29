@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spike D — Monarch in a worker</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      body {
+        background: #1e1e1e;
+        color: #d4d4d4;
+        margin: 24px;
+        max-width: 1100px;
+      }
+      button {
+        background: #0e639c;
+        border: 0;
+        color: white;
+        cursor: pointer;
+        padding: 8px 12px;
+        margin-right: 8px;
+      }
+      button:disabled {
+        cursor: wait;
+        opacity: 0.6;
+      }
+      pre {
+        background: #252526;
+        border: 1px solid #3f3f46;
+        padding: 12px;
+        white-space: pre-wrap;
+      }
+      code {
+        color: #9cdcfe;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Spike D — Monarch TypeScript tokenization in a Web Worker</h1>
+    <p id="description">
+      The worker imports Monaco's Monarch compiler/lexer and TypeScript grammar.
+      Results are transferred as token colors and R8 minimap bytes.
+    </p>
+    <p>
+      <button id="run-sample" type="button">Run one 2000-line file</button>
+      <button id="run-dataset" type="button">
+        Run Reference Dataset (200 files)
+      </button>
+      <button id="copy-results" type="button">Copy results as JSON</button>
+    </p>
+    <pre id="status">Idle.</pre>
+    <pre id="results">No results yet.</pre>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
