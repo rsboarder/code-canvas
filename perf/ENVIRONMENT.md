@@ -6,7 +6,8 @@ The frame criterion (spec `performance-budget`) is judged only here. The harness
 |---|---|
 | Machine | MacBook Pro with the built-in ProMotion display (120 Hz), DPR 2 |
 | Power | AC power attached; Low Power Mode off (it caps the display at 60 Hz; not measured by an agent — `pmset` shows the state, the preflight checks it) |
-| Browser | Google Chrome stable, launched by Playwright with `channel: "chrome"`, headed, no vsync or frame-rate flags |
+| Browser | Google Chrome stable (154.0.8037.58 on 2026-09-29; the preflight records the exact version), launched by Playwright with `channel: "chrome"`, headed, no vsync or frame-rate flags |
+| Profile | a clean temporary profile created by Playwright for each run: no extensions, no signed-in account, no restored tabs |
 | Window | visible, covering the built-in display; the machine is otherwise idle and the screen unlocked (a locked screen suppresses presentation) |
 | Build | production build served by `vite preview`, never the dev server |
 
@@ -25,7 +26,7 @@ Classified with `@paulirish/trace_engine` (`PipelineReporter` state), the same e
 
 The spike A trace does not animate (243 presented frames per minute), so it is the floor of an idle page, not of a page redrawing every frame as design D13 defines it. The harness self-test measures that floor before every scenario.
 
-**Preliminary validity threshold** (to confirm once the harness has measured the animated floor over several sessions): a measurement is invalid (exit code 2) if the same-session floor exceeds **3 dropped or 3 partially presented frames per minute, or any interval > 12.5 ms per minute on the idle rAF sample**. A scenario passes against the floor as spec `performance-budget` "Noise floor" states.
+**Preliminary validity threshold** (set 2026-09-29; to confirm once the harness has measured the animated floor over several sessions): a measurement is invalid (exit code 2) if the same-session floor exceeds **3 dropped or 3 partially presented frames per minute, or any interval > 12.5 ms per minute on the idle rAF sample**. A scenario passes against the floor as spec `performance-budget` "Noise floor" states.
 
 ## Not verified by an agent
 

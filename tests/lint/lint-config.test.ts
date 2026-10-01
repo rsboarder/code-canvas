@@ -98,6 +98,16 @@ const violationCases = [
     virtualPath: "src/board/domain/fixture.ts",
     ruleId: "no-restricted-globals",
   },
+  {
+    fixture: "perf-context-import.ts",
+    virtualPath: "perf/lint-fixture.ts",
+    ruleId: "boundaries/dependencies",
+  },
+  {
+    fixture: "perf-internal-import.ts",
+    virtualPath: "perf/lint-fixture.ts",
+    ruleId: "boundaries/dependencies",
+  },
 ] as const;
 
 const allowedCases = [
@@ -150,6 +160,11 @@ const allowedCases = [
     fixture: "allowed/interaction-board-import.ts",
     virtualPath: "src/interaction/x.ts",
     matrix: true,
+  },
+  {
+    fixture: "perf-bridge-import.ts",
+    virtualPath: "perf/lint-fixture.ts",
+    matrix: false,
   },
 ] as const;
 
@@ -205,7 +220,9 @@ async function createEslint(
                 "src/interaction/x.ts",
                 "src/*/*/*.ts",
                 "src/*/*.ts",
+                "perf/*.ts",
               ],
+              maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 16,
             },
           },
         },

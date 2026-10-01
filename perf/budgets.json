@@ -1,0 +1,16 @@
+{
+  "warmupRuns": { "value": 1, "source": "design D13: 1 warm-up run" },
+  "measuredRuns": { "value": 5, "source": "design D13: 5 measured runs" },
+  "applicationTaskMs": {
+    "value": 8,
+    "source": "performance-budget Frame budget: no application task longer than 8 ms"
+  },
+  "longIntervalMs": {
+    "value": 12.5,
+    "source": "performance-budget Frame budget: intervals longer than 12.5 ms"
+  },
+  "allowedRegression": {
+    "value": 0.2,
+    "source": "performance-harness Baseline comparison: configured allowed deviation of 20%"
+  }
+}

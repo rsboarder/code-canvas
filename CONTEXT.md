@@ -67,6 +67,10 @@ A contiguous span of a line in a single color.
 **Theme Palette**:
 The set of token colors; shared between widgets and the Editor.
 
+**Text Metrics**:
+The widths of characters and the position of the baseline for the code font, as the browser lays the font out. Widgets and the Editor place characters by the same Text Metrics, so code does not shift when a Widget turns into the Editor and back.
+_Avoid_: font info, cell size, char width
+
 **Detail Level**:
 How all Widgets are represented at the current Camera zoom, depending on the on-screen size of a line: Text or Minimap. There is one Detail Level for the whole Board.
 _Avoid_: LOD (acceptable only when talking specifically about rendering), zoom level

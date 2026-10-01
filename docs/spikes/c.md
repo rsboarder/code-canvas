@@ -61,6 +61,8 @@ Final headed run by the lead (2026-09-29 06:23, screen active — spike E ran no
 | Undo | 186 / 3 / 1 / 1 | 9.9 | 1 | 40 |
 | Model switching | 189 / 15 / 2 / 1 | 10.1 | 1 | 32 |
 
+The traces kept in `spikes/c/results/` come from a later run than this table: the spike's own analyzer (`spikes/c/analyze-traces.mjs`) gives 187 / 75 / 1 / 0 frames and a longest task of 9.3 ms for `paste-500-lines.json.gz` (checked 2026-09-29). That file is the golden fixture of the harness classifier (`perf/harness/fixtures/`).
+
 "Presented" counts only frames with new content; the short actions are mostly idle frames, so low presented counts are not drops. Earlier runs (different harness code) showed max tasks of 8.8–21.5 ms and 0–13 dropped frames while typing, so the variance between runs is large. The in-page Long Tasks observer reported no task ≥ 50 ms. The tasks > 8.33 ms are seen in the trace; this spike does not separate Monaco's own work from the harness's (keep-alive rendering, tracing overhead).
 
 Pixel alignment, final renderer (max deviation in device px, DPR 2; x / baseline):

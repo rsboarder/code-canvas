@@ -117,7 +117,7 @@ The application SHALL support a debug mode, enabled only by the harness, that ar
 
 #### Scenario: Harness produces no false failures
 - **WHEN** the self-test runs an empty scene with no load
-- **THEN** the harness records no dropped frames
+- **THEN** the harness records no more dropped or partially presented frames than the noise floor measured in preflight allows for the run's duration
 
 ### Requirement: Stage-timing mode
 The harness SHALL have a mode, available to an agent without a visible browser window and without the reference display, that plays back the same scenarios and compares only the application's frame-stage times and application task durations against the budgets. This mode SHALL NOT issue a verdict on frame rate and SHALL mark the report as "frames not measured"; its exit code SHALL differ from that of the full run.

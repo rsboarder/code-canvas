@@ -7,6 +7,8 @@ export default defineConfig({
       "fixtures/**/*.test.ts",
       "scripts/**/*.test.ts",
       "tests/lint/**/*.test.ts",
+      "tests/build/**/*.test.ts",
+      "perf/**/*.test.ts",
     ],
     passWithNoTests: false,
   },
