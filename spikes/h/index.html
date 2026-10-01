@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spike H — text sharpness</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        background: #11151c;
+        color: #d9e1ee;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      body {
+        margin: 0;
+        padding: 20px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0;
+      }
+      #ready-state,
+      #status {
+        color: #8ee0a4;
+        font-size: 12px;
+      }
+      #status {
+        color: #aab7c8;
+        margin: 0 0 16px;
+      }
+      #variants {
+        display: grid;
+        grid-template-columns: repeat(2, 360px);
+        gap: 16px;
+      }
+      figure {
+        margin: 0;
+      }
+      figcaption {
+        font-size: 12px;
+        margin: 0 0 6px;
+      }
+      .viewport {
+        position: relative;
+        width: 360px;
+        height: 140px;
+        box-sizing: border-box;
+        overflow: hidden;
+        background: #181e28;
+        border: 1px solid #35435a;
+      }
+      .viewport > canvas,
+      .dom-layer {
+        display: block;
+        width: 360px;
+        height: 140px;
+        transform-origin: 0 0;
+      }
+      .dom-layer {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        color: #d9e1ee;
+        background: #181e28;
+        white-space: pre;
+        font-family: var(--font-family);
+        font-size: var(--font-size);
+        line-height: var(--line-height);
+        font-feature-settings: var(--font-features);
+        letter-spacing: 0;
+        text-rendering: geometricPrecision;
+      }
+      .dom-line {
+        position: absolute;
+        left: 0;
+        white-space: pre;
+        height: var(--line-height);
+      }
+      .dom-cluster {
+        position: absolute;
+        top: 0;
+        white-space: pre;
+      }
+      .webgl-error {
+        display: grid;
+        place-items: center;
+        height: 100%;
+        color: #ff9d9d;
+        font-size: 12px;
+        text-align: center;
+        white-space: pre-wrap;
+      }
+      @media (max-width: 780px) {
+        #variants {
+          grid-template-columns: 360px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Spike H — corrected atlas vs Canvas2D vs DOM</h1>
+      <span id="ready-state">loading reference text…</span>
+    </header>
+    <p id="status" aria-live="polite"></p>
+    <main id="variants" aria-label="text rendering variants"></main>
+    <script type="module" src="/spikes/h/main.ts"></script>
+  </body>
+</html>

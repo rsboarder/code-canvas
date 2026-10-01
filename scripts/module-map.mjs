@@ -337,6 +337,7 @@ export const moduleMap = {
       "vscode-oniguruma",
       "tm-grammars",
       "tm-themes",
+      "webgl-lint",
     ],
   },
 };

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spike H2 — frame cost by text renderer</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #11151c;
+        color: #d9e1ee;
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+      }
+      header {
+        display: flex;
+        gap: 16px;
+        align-items: baseline;
+        margin-bottom: 10px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0;
+      }
+      #ready-state {
+        color: #8ee0a4;
+        font-size: 12px;
+      }
+      #status {
+        color: #aab7c8;
+        font-size: 12px;
+        min-height: 16px;
+      }
+      canvas {
+        display: block;
+        width: 1200px;
+        height: 720px;
+        background: #181e28;
+        border: 1px solid #35435a;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Spike H2 — atlas vs Canvas2D tiles</h1>
+      <span id="ready-state">loading reference dataset…</span>
+    </header>
+    <div id="status" aria-live="polite"></div>
+    <canvas id="scene" width="2400" height="1440"></canvas>
+    <script type="module" src="/spikes/h2/main.ts"></script>
+  </body>
+</html>

@@ -11,3 +11,4 @@ fixtures/edge-case-corpus/
 spikes/*/results/
 .cdx-papercuts.jsonl
 .omo/
+docs/handovers/
