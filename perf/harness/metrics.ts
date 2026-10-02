@@ -15,6 +15,9 @@ export interface BridgeMetrics {
   readonly stages: Readonly<Record<string, BridgeStageMetrics>>;
   readonly residencyBacklog: Statistic;
   readonly gpuTimeMs: Statistic;
+  readonly tileMemoryBytes?: Statistic;
+  readonly missingTileFrameCount?: number;
+  readonly timeToSharpMs?: Statistic;
 }
 
 export function collectBridgeMetrics(bridge: PerfBridge): BridgeMetrics {
@@ -29,6 +32,9 @@ export function bridgeMetricsFromSnapshot(snapshot: unknown): BridgeMetrics {
       snapshot.residencyBacklog ?? snapshot.residencyBacklogDepth,
     ),
     gpuTimeMs: readStatistic(snapshot.gpuTimeMs ?? snapshot.gpuTime),
+    tileMemoryBytes: readStatistic(snapshot.tileMemoryBytes),
+    missingTileFrameCount: readCount(snapshot.missingTileFrameCount),
+    timeToSharpMs: readStatistic(snapshot.timeToSharpMs),
   };
 }
 
@@ -61,7 +67,16 @@ function unavailableMetrics(): BridgeMetrics {
     stages: {},
     residencyBacklog: UNAVAILABLE,
     gpuTimeMs: UNAVAILABLE,
+    tileMemoryBytes: UNAVAILABLE,
+    missingTileFrameCount: 0,
+    timeToSharpMs: UNAVAILABLE,
   };
+}
+
+function readCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

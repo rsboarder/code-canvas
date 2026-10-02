@@ -50,7 +50,11 @@ During editing, the camera and the Widget Frame of the active widget SHALL remai
 - **THEN** the code in the editor scrolls, the canvas stays in place
 
 ### Requirement: Saving edits
-The system SHALL write edits to the source file on disk when editing ends, and at least every 1 second after the last change while editing. If the write fails, the system SHALL show an error notification and keep the edits in memory until the write succeeds.
+The system SHALL write edits to the source file on disk when editing ends, and at least every 1 second after the last change while editing. If the write fails, the system SHALL show an error notification and keep the edits in memory until the write succeeds. A file the user opened in the editor but did not change SHALL NOT be written. A file the user changed MAY be written with the editor's normalized line endings (for example, a file with lone CR line breaks is saved with the editor's line break).
+
+#### Scenario: Opening without a change
+- **WHEN** the user opens a file whose lines end in lone CR characters in the editor and exits without typing
+- **THEN** the file is not written and its Content Version does not change
 
 #### Scenario: Autosave
 - **WHEN** the user typed a character and does nothing for 1 second

@@ -60,3 +60,74 @@ describe("FrameStats", () => {
     expect(stats.snapshot().p50).toBe("unavailable");
   });
 });
+
+describe("FrameStats tile metrics", () => {
+  it("reports the latest tile memory and counts missing-tile frames", () => {
+    const stats = new FrameStats();
+    stats.record({
+      ...sample(0, 1, 2),
+      tileMemoryBytes: 1024,
+      missingTile: true,
+    });
+    stats.record({
+      ...sample(8, 1, 2),
+      tileMemoryBytes: 2048,
+      missingTile: false,
+    });
+    stats.record(sample(16, 1, 2));
+
+    const snapshot = stats.snapshot();
+    expect(snapshot.tileMemoryBytes).toBe(2048);
+    expect(snapshot.missingTileFrameCount).toBe(1);
+  });
+
+  it("reports unavailable tile metrics and no missing-tile frames by default", () => {
+    const stats = new FrameStats();
+    stats.record(sample(0, 1, 2));
+
+    const snapshot = stats.snapshot();
+    expect(snapshot.tileMemoryBytes).toBe("unavailable");
+    expect(snapshot.missingTileFrameCount).toBe(0);
+    expect(snapshot.timeToSharpMs).toBe("unavailable");
+  });
+
+  it("reports the latest time to sharp, a one-shot value from a zoom settle", () => {
+    const stats = new FrameStats();
+    stats.record(sample(0, 1, 2));
+    stats.record({ ...sample(8, 1, 2), timeToSharpMs: 42 });
+    stats.record(sample(16, 1, 2));
+
+    expect(stats.snapshot().timeToSharpMs).toBe(42);
+  });
+
+  it("ignores a NaN time to sharp when no settle completed", () => {
+    const stats = new FrameStats();
+    stats.record({ ...sample(0, 1, 2), timeToSharpMs: 42 });
+    stats.record({ ...sample(8, 1, 2), timeToSharpMs: Number.NaN });
+
+    expect(stats.snapshot().timeToSharpMs).toBe(42);
+  });
+
+  it("ignores NaN tile memory when no memory value was reported", () => {
+    const stats = new FrameStats();
+    stats.record({ ...sample(0, 1, 2), tileMemoryBytes: 1024 });
+    stats.record({ ...sample(8, 1, 2), tileMemoryBytes: Number.NaN });
+
+    expect(stats.snapshot().tileMemoryBytes).toBe(1024);
+  });
+
+  it("clears tile metrics on reset", () => {
+    const stats = new FrameStats();
+    stats.record({
+      ...sample(0, 1, 2),
+      tileMemoryBytes: 1024,
+      missingTile: true,
+    });
+
+    stats.reset();
+
+    const snapshot = stats.snapshot();
+    expect(snapshot.tileMemoryBytes).toBe("unavailable");
+    expect(snapshot.missingTileFrameCount).toBe(0);
+  });
+});

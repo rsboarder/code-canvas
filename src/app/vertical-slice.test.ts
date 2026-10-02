@@ -32,10 +32,10 @@ describe("vertical slice domain policies", () => {
 
   it("switches Detail Level only outside its hysteresis band", () => {
     const detail = new DetailLevel();
-    expect(detail.update(9)).toBe("text");
-    expect(detail.update(8.9)).toBe("minimap");
-    expect(detail.update(11)).toBe("minimap");
-    expect(detail.update(11.1)).toBe("text");
+    expect(detail.update(9, true)).toBe("text");
+    expect(detail.update(8.9, true)).toBe("minimap");
+    expect(detail.update(11, true)).toBe("minimap");
+    expect(detail.update(11.1, true)).toBe("text");
   });
 
   it("computes fractional x prefix sums with tab stops", () => {

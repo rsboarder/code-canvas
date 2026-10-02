@@ -68,6 +68,17 @@ const task = (
   args: { data: { url } },
 });
 
+const inputDispatch = (timestamp: number, type: string): TraceEvent => ({
+  name: "EventDispatch",
+  cat: "devtools.timeline",
+  ph: "X",
+  ts: timestamp,
+  dur: 1,
+  pid: 1,
+  tid: 3,
+  args: { data: { type } },
+});
+
 const traceForStates = (
   states: readonly string[],
   tasks: readonly TraceEvent[] = [
@@ -126,6 +137,83 @@ it("ignores idle frames when measuring presentation intervals", async () => {
   expect(metrics.frames.idle).toBe(1);
   expect(metrics.intervalsMs.max).toBe(16);
   expect(metrics.intervalsOver12_5Ms).toBe(1);
+});
+
+it("keeps the whole trace when there are no input dispatch events", async () => {
+  const metrics = await classify(
+    traceForStates(["STATE_PRESENTED_ALL", "STATE_PRESENTED_ALL"]),
+  );
+
+  expect(metrics.frames.total).toBe(2);
+});
+
+it("excludes presented frames before the first input event and after its tail", async () => {
+  const metrics = await classify([
+    mainThreadMetadata,
+    task(0, 1_000, "https://app.test/assets/main.js"),
+    ...frame(0, "STATE_PRESENTED_ALL"), // ts 0: idle time before the gesture
+    inputDispatch(100_000, "wheel"),
+    ...frame(20, "STATE_PRESENTED_ALL"), // ts 160,000: inside the window
+    ...frame(21, "STATE_PRESENTED_ALL"), // ts 168,000: inside the window
+    inputDispatch(168_000, "wheel"),
+    ...frame(40, "STATE_PRESENTED_ALL"), // ts 320,000: past the 100 ms tail
+  ]);
+
+  expect(metrics.frames.total).toBe(2);
+  expect(metrics.frames.presented).toBe(2);
+});
+
+it("counts whole-trace frames separately from interaction-window frames", async () => {
+  const metrics = await classify([
+    mainThreadMetadata,
+    task(0, 1_000, "https://app.test/assets/main.js"),
+    ...frame(0, "STATE_PRESENTED_ALL"), // before the first input
+    inputDispatch(100_000, "wheel"),
+    ...frame(20, "STATE_PRESENTED_PARTIAL"), // inside the window
+    ...frame(21, "STATE_DROPPED"), // inside the window
+    inputDispatch(168_000, "wheel"),
+    ...frame(30, "STATE_PRESENTED_ALL"), // inside the tail
+    ...frame(40, "STATE_PRESENTED_NO_DAMAGE"), // after the tail
+  ]);
+
+  expect(metrics.traceFrames).toEqual({
+    total: 5,
+    presented: 2,
+    partiallyPresented: 1,
+    dropped: 1,
+    idle: 1,
+  });
+  expect(metrics.frames).toEqual({
+    total: 3,
+    presented: 1,
+    partiallyPresented: 1,
+    dropped: 1,
+    idle: 0,
+  });
+});
+
+it("still counts a long interval between two presented frames inside the window", async () => {
+  const metrics = await classify([
+    mainThreadMetadata,
+    task(0, 1_000, "https://app.test/assets/main.js"),
+    inputDispatch(0, "wheel"),
+    ...frame(0, "STATE_PRESENTED_ALL"), // ts 0
+    ...frame(5, "STATE_PRESENTED_ALL"), // ts 40,000: a 40 ms gap
+  ]);
+
+  expect(metrics.intervalsMs.max).toBe(40);
+  expect(metrics.intervalsOver12_5Ms).toBe(1);
+});
+
+it("counts a main-thread task that runs before the interaction window", async () => {
+  const metrics = await classify([
+    mainThreadMetadata,
+    task(0, 9_000, "https://app.test/assets/main.js"),
+    inputDispatch(50_000, "wheel"),
+    ...frame(10, "STATE_PRESENTED_ALL"), // ts 80,000: inside the window
+  ]);
+
+  expect(metrics.longestApplicationTaskMs).toBe(9);
 });
 
 it("attributes long application and browser tasks on the renderer main thread", async () => {
@@ -219,10 +307,15 @@ it("returns invalid measurement when cc PipelineReporter events are absent", asy
   expect(result).toEqual({ valid: false, reason: "zero-pipeline-frames" });
 });
 
-// Expected values come from spike C's own analyzer (spikes/c/analyze-traces.mjs)
-// run on this file: 187 frames, 75 presented, 1 dropped, 0 partial, longest
-// RunTask over all threads 9.261 ms. The table in docs/spikes/c.md is from
-// another run of that spike.
+// Main-thread task metrics (below) are a whole-trace measurement, matching
+// spike C's own analyzer (spikes/c/analyze-traces.mjs) run on this file:
+// longest RunTask over all threads 9.261 ms. The table in docs/spikes/c.md is
+// from another run of that spike.
+// Frame counts (harness R3) are windowed to the interaction instead: this
+// golden trace has 5 keydown EventDispatch events clustered early, so only
+// the frames from the first to the last of them, plus a 100 ms tail, count —
+// 13 of the trace's 187 pipeline frames, with the idle time before and after
+// typing correctly excluded.
 it("reproduces the paste-500-lines golden trace counts", async () => {
   const startedAt = performance.now();
   const compressed = readFileSync(
@@ -236,11 +329,11 @@ it("reproduces the paste-500-lines golden trace counts", async () => {
   process.stdout.write(`golden trace duration: ${durationMs.toFixed(1)} ms\n`);
 
   expect(metrics.frames).toMatchObject({
-    total: 187,
-    presented: 75,
+    total: 13,
+    presented: 12,
     dropped: 1,
     partiallyPresented: 0,
-    idle: 111,
+    idle: 0,
   });
   expect(metrics.maxMainThreadTaskMs).toBeLessThanOrEqual(9.261);
   expect(metrics.tasksOver8_33Ms).toBeLessThanOrEqual(2);

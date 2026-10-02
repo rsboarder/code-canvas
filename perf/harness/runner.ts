@@ -5,7 +5,6 @@ import { promisify } from "node:util";
 import { chromium, type CDPSession, type Page } from "@playwright/test";
 
 import { checkCoverage, requiredScenarios } from "./coverage";
-import { runEvents, planEvents } from "./driver";
 import {
   collectEnvironment,
   evaluateNoiseFloor,
@@ -20,21 +19,20 @@ import {
   traceArchive,
   type Baseline,
   type BudgetConfig,
+  type CameraCheck,
+  type CameraRangeCheck,
+  type GestureTiming,
   type HarnessMode,
   type HarnessReport,
   type ScenarioRun,
-  type ScenarioRunMetrics,
 } from "./report";
+import { runScenario } from "./scenario-execution";
 import {
-  classifyTrace,
   recordTrace,
   type InvalidMeasurement,
-  type TraceClassification,
-  type TraceEvents,
   type TraceMetrics,
 } from "./trace";
-import { bridgeMetricsFromSnapshot, type BridgeMetrics } from "./metrics";
-import { openHarnessPage } from "./harness-page";
+import { HEADED_WINDOW_ARGS, openHarnessPage } from "./harness-page";
 import type { PerfFile } from "../../src/performance/bridge";
 import type { Scenario } from "../scenarios/schema";
 import panScenario from "../scenarios/pan-whole-canvas";
@@ -163,7 +161,7 @@ async function measureScenarios(
     if (!Array.isArray(measuredRuns))
       return invalidResult(
         options.mode,
-        measuredRuns.reason,
+        invalidMeasurementReason(measuredRuns),
         options.environment,
         noiseFloor,
       );
@@ -237,92 +235,6 @@ async function collectMeasuredRuns(
   return runs;
 }
 
-async function runScenario(
-  page: Page,
-  cdp: CDPSession,
-  scenario: Scenario,
-  mode: HarnessMode,
-): Promise<ScenarioExecution | InvalidMeasurement> {
-  const events = planEvents(scenario, 120);
-  const bridgeAvailable = await page.evaluate(
-    () => typeof window.__perf?.snapshot === "function",
-  );
-  if (!bridgeAvailable) return { valid: false, reason: "app-bridge-missing" };
-  await page.evaluate(() => window.__perf?.reset());
-  const result = await recordTrace(cdp, () =>
-    recordScenarioAction(cdp, events),
-  );
-  const bridgeMetrics = await readBridgeMetrics(page);
-  const classified = await classifyTrace(result, {
-    applicationMarkers: ["127.0.0.1", "localhost"],
-    bridgeMetrics,
-  });
-  if (mode === "stages")
-    return stageClassification(classified, result, bridgeMetrics);
-  if (!classified.valid) return classified;
-  return { valid: true, metrics: metricsFromTrace(classified), trace: result };
-}
-
-interface ScenarioExecution {
-  readonly valid: true;
-  readonly metrics: ScenarioRunMetrics;
-  readonly trace: TraceEvents;
-}
-
-async function recordScenarioAction(
-  cdp: CDPSession,
-  events: ReturnType<typeof planEvents>,
-): Promise<void> {
-  await runEvents(cdp, events);
-}
-
-function stageClassification(
-  classified: TraceClassification,
-  trace: TraceEvents,
-  bridge: BridgeMetrics,
-): ScenarioExecution {
-  if (classified.valid)
-    return { valid: true, metrics: metricsFromTrace(classified), trace };
-  const tasks = trace.filter(
-    (event) => event.name === "RunTask" && typeof event.dur === "number",
-  );
-  const longest = tasks.reduce(
-    (max, event) => Math.max(max, (event.dur ?? 0) / 1_000),
-    0,
-  );
-  return {
-    valid: true,
-    metrics: {
-      applicationTaskMs: longest,
-      p99: "unavailable",
-      droppedFrames: 0,
-      partiallyPresentedFrames: 0,
-      longIntervals: 0,
-      stages: bridge.stages,
-    },
-    trace,
-  };
-}
-
-async function readBridgeMetrics(page: Page): Promise<BridgeMetrics> {
-  const snapshot = await page.evaluate(() => window.__perf?.snapshot());
-  return bridgeMetricsFromSnapshot(snapshot);
-}
-
-function metricsFromTrace(metrics: TraceMetrics): ScenarioRunMetrics {
-  return {
-    applicationTaskMs: metrics.longestApplicationTaskMs,
-    p99: metrics.intervalsMs.p99,
-    droppedFrames: metrics.frames.dropped,
-    partiallyPresentedFrames: metrics.frames.partiallyPresented,
-    longIntervals:
-      typeof metrics.intervalsOver12_5Ms === "number"
-        ? metrics.intervalsOver12_5Ms
-        : 0,
-    stages: metrics.stages,
-  };
-}
-
 function selectScenarios(
   scenarios: readonly Scenario[],
   selected: string | undefined,
@@ -338,6 +250,10 @@ export async function missingBridgeCommands(
   const required = [...(scenario.setup.requiresBridgeCommands ?? [])];
   if (scenario.setup.camera && !required.includes("setCamera"))
     required.push("setCamera");
+  if (scenario.setup.camera && !required.includes("camera"))
+    required.push("camera");
+  if (scenario.setup.camera && !required.includes("cameraRange"))
+    required.push("cameraRange");
   return page.evaluate((commands) => {
     const bridge = window.__perf as unknown as
       Record<string, unknown> | undefined;
@@ -404,18 +320,39 @@ function renderTable(report: HarnessReport): string {
   const lines = [
     `VERDICT: ${report.verdict}`,
     "",
-    "Scenario | App task ms | p99 ms | Delta to baseline",
-    "--- | ---: | ---: | ---:",
+    "Scenario | App task ms | p99 ms | Delta to baseline | Gesture ratio | Camera",
+    "--- | ---: | ---: | ---: | ---: | ---",
   ];
-  for (const scenario of report.scenarios)
+  for (const scenario of report.scenarios) {
+    const metrics = scenario.worstRun.metrics;
     lines.push(
-      `${scenario.scenario} | ${format(scenario.worstRun.metrics.applicationTaskMs)} | ${format(scenario.worstRun.metrics.p99)} | ${String(scenario.regressions.length)}`,
+      `${scenario.scenario} | ${format(metrics.applicationTaskMs)} | ${format(metrics.p99)} | ${String(scenario.regressions.length)} | ${gestureRatioText(metrics.gesture)} | ${cameraCheckText(metrics.camera, metrics.cameraRange)}`,
     );
+  }
   return lines.join("\n");
 }
 
 function format(value: number | "unavailable"): string {
   return typeof value === "number" ? value.toFixed(2) : value;
+}
+
+function gestureRatioText(gesture: GestureTiming | undefined): string {
+  return gesture ? gesture.ratio.toFixed(2) : "n/a";
+}
+
+function cameraCheckText(
+  camera: CameraCheck | undefined,
+  cameraRange: CameraRangeCheck | undefined,
+): string {
+  if (!camera?.checked) return "skipped";
+  const final = camera.withinTolerance ? "ok" : "mismatch";
+  if (!cameraRange?.recorded) return final;
+  const { minScale, maxScale } = cameraRange.recorded;
+  return `${final} [${minScale.toFixed(2)}-${maxScale.toFixed(2)}]`;
+}
+
+function invalidMeasurementReason(result: InvalidMeasurement): string {
+  return result.detail ? `${result.reason}: ${result.detail}` : result.reason;
 }
 
 function invalidResult(
@@ -554,11 +491,13 @@ async function runLiveHarness(options: HarnessOptions): Promise<HarnessResult> {
       env: process.env,
       stdio: "ignore",
     });
+    const headed = options.mode !== "stages";
     browser = await chromium.launch({
       channel: "chrome",
-      headless: options.mode === "stages",
+      headless: !headed,
+      args: headed ? HEADED_WINDOW_ARGS : [],
     });
-    const page = await openHarnessPage(browser);
+    const page = await openHarnessPage(browser, headed);
     await gotoPreview(page, DEFAULT_PREVIEW_PORT);
     if (!(await waitForApplicationBridge(page)))
       return invalidResult(options.mode, "application bridge is unavailable");

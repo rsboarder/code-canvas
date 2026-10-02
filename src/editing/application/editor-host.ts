@@ -15,10 +15,12 @@ export interface EditorHost {
   open(options: EditorOpenOptions): void;
   close(): void;
   setVisible(visible: boolean): void;
+  setReadOnly(readOnly: boolean): void;
   setBounds(bounds: Rect, zoom: number): void;
   setPosition(cursor: EditorCursor): void;
   getPosition(): EditorCursor | undefined;
   getValue(): string;
+  hasContentChanged(): boolean;
   getLineCount(): number;
   onChange(listener: () => void): () => void;
   onEscape(listener: () => void): () => void;

@@ -35,6 +35,7 @@ class MonacoEditorHost implements EditorHost {
   private readonly models: ModelBookkeeping<monacoEditor.ITextModel>;
   private readonly disposables: { dispose(): void }[] = [];
   private modelDisposable: { dispose(): void } | undefined;
+  private openedAlternativeVersionId: number | undefined;
 
   constructor(
     private readonly container: HTMLElement,
@@ -115,11 +116,13 @@ class MonacoEditorHost implements EditorHost {
     this.modelDisposable = undefined;
     const model = monacoEditor.createModel(options.text, options.language);
     this.models.replace(model);
+    this.openedAlternativeVersionId = model.getAlternativeVersionId();
     this.editor.updateOptions({
       fontSize: this.font.size,
       lineHeight: this.font.lineHeight,
       fontLigatures: false,
       letterSpacing: 0,
+      readOnly: false,
     });
     this.editor.layout();
     this.editor.setPosition(options.cursor);
@@ -133,6 +136,7 @@ class MonacoEditorHost implements EditorHost {
   close(): void {
     this.modelDisposable?.dispose();
     this.modelDisposable = undefined;
+    this.openedAlternativeVersionId = undefined;
     this.models.close();
   }
 
@@ -140,6 +144,10 @@ class MonacoEditorHost implements EditorHost {
     this.container.style.visibility = visible ? "visible" : "hidden";
     this.container.style.pointerEvents = visible ? "auto" : "none";
     if (visible) this.editor.focus();
+  }
+
+  setReadOnly(readOnly: boolean): void {
+    this.editor.updateOptions({ readOnly });
   }
 
   setBounds(bounds: Rect, zoom: number): void {
@@ -166,6 +174,15 @@ class MonacoEditorHost implements EditorHost {
 
   getValue(): string {
     return this.models.activeModel?.getValue() ?? "";
+  }
+
+  hasContentChanged(): boolean {
+    const model = this.models.activeModel;
+    return (
+      model !== undefined &&
+      this.openedAlternativeVersionId !== undefined &&
+      model.getAlternativeVersionId() !== this.openedAlternativeVersionId
+    );
   }
 
   getLineCount(): number {

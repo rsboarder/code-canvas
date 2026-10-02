@@ -1,4 +1,4 @@
-import { poissonUpperBoundPerMinute } from "./poisson";
+import { evaluateFloorMetric } from "./floor-verdict";
 import type { NoiseFloor } from "./preflight";
 
 export const SELF_TEST_CASE_NAMES = [
@@ -128,26 +128,21 @@ function expectationsForCase(
         String(measurement.applicationTaskMs),
       ),
     ];
-  const allowancePerRun =
-    poissonUpperBoundPerMinute(
-      noiseFloor.droppedFramesPerMinute +
-        noiseFloor.partiallyPresentedFramesPerMinute,
-      1,
-    ) *
-    (measurement.durationMs / 60_000);
   const actualPerRun = measurement.runs.map(
     (run) => run.droppedFrames + run.partiallyPresentedFrames,
   );
-  const runsOverAllowance = actualPerRun.filter(
-    (actual) => actual > allowancePerRun,
-  ).length;
-  const majorityOverAllowance = runsOverAllowance * 2 > actualPerRun.length;
+  const floorVerdict = evaluateFloorMetric(
+    actualPerRun,
+    noiseFloor.droppedFramesPerMinute +
+      noiseFloor.partiallyPresentedFramesPerMinute,
+    measurement.durationMs,
+  );
   return [
     expectation(
       "dropped or partially presented frames across measured runs",
-      !majorityOverAllowance,
-      `<= ${String(allowancePerRun)} in a majority of ${String(actualPerRun.length)} runs`,
-      `${actualPerRun.join(", ")} (${String(runsOverAllowance)}/${String(actualPerRun.length)} runs over)`,
+      !floorVerdict.fails,
+      `<= ${String(floorVerdict.allowancePerRun)} in a majority of ${String(floorVerdict.runCount)} runs`,
+      `${actualPerRun.join(", ")} (${String(floorVerdict.runsOverAllowance)}/${String(floorVerdict.runCount)} runs over)`,
     ),
   ];
 }

@@ -15,6 +15,8 @@ interface TestEditorHost extends EditorHost {
   value: string;
   visible: boolean;
   closeCount: number;
+  isOpen: boolean;
+  readOnly: boolean;
   suggestWidgetOpen: boolean;
   findWidgetOpen: boolean;
   triggerEscape(): void;
@@ -29,6 +31,8 @@ function setup(createEditor: () => TestEditorHost) {
     frame: { x: 0, y: 0, width: 600, height: 120 },
   };
   const editor = createEditor();
+  let tilesCurrent = true;
+  let rasterError = false;
   const changed: { version: number; text: string }[] = [];
   const uploaded: string[] = [];
   const residency = new DocumentResidency({
@@ -43,11 +47,25 @@ function setup(createEditor: () => TestEditorHost) {
     editor,
     residency,
     readSource: () => source,
+    tilesCurrent: () => tilesCurrent || rasterError,
   });
   editor.onEscape(() => {
     transition.end("escape");
   });
-  return { camera, changed, editor, residency, uploaded, transition };
+  return {
+    camera,
+    changed,
+    editor,
+    residency,
+    setTilesCurrent: (current: boolean) => {
+      tilesCurrent = current;
+    },
+    reportRasterError: () => {
+      rasterError = true;
+    },
+    uploaded,
+    transition,
+  };
 }
 
 export function registerEditingTransitionTests(
@@ -101,6 +119,7 @@ export function registerEditingTransitionTests(
     assertions.equal(transition.takeFrameSwap()?.direction, "exit");
     assertions.equal(editor.closeCount, 1);
     assertions.equal(changed, []);
+    assertions.equal(transition.sourceForActiveWidget()?.contentVersion, 1);
   });
 
   run("keeps the camera scale when entering editing", () => {
@@ -114,6 +133,64 @@ export function registerEditingTransitionTests(
   });
 
   registerEditorPortTests(run, assertions, createEditor);
+  registerHeldExitTests(run, assertions, createEditor);
+}
+
+function registerHeldExitTests(
+  run: TestRunner,
+  assertions: TestAssertions,
+  createEditor: () => TestEditorHost,
+): void {
+  run("holds an edited exit until the current tiles are ready", () => {
+    const { editor, setTilesCurrent, transition } = setup(createEditor);
+    transition.begin("file.ts", { x: 0, y: 0 }, { lineNumber: 1, column: 1 });
+    transition.takeFrameSwap();
+    editor.value = "const answer = 43;\n";
+    setTilesCurrent(false);
+    transition.end("escape");
+    assertions.true(transition.isExitHeld);
+    assertions.true(editor.visible);
+    assertions.true(editor.readOnly);
+    assertions.true(editor.isOpen);
+    assertions.equal(transition.takeFrameSwap(), undefined);
+    setTilesCurrent(true);
+    assertions.equal(transition.takeFrameSwap()?.direction, "exit");
+    assertions.true(!editor.visible);
+    assertions.true(!editor.isOpen);
+    assertions.equal(editor.closeCount, 1);
+  });
+
+  run("refuses to begin while an edited exit is held", () => {
+    const { editor, setTilesCurrent, transition } = setup(createEditor);
+    transition.begin("file.ts", { x: 0, y: 0 }, { lineNumber: 1, column: 1 });
+    transition.takeFrameSwap();
+    editor.value = "const answer = 43;\n";
+    setTilesCurrent(false);
+    transition.end("escape");
+    assertions.true(
+      !transition.begin(
+        "file.ts",
+        { x: 0, y: 0 },
+        { lineNumber: 1, column: 1 },
+      ),
+    );
+  });
+
+  run("releases an edited exit when rendering reports a raster error", () => {
+    const { editor, reportRasterError, setTilesCurrent, transition } =
+      setup(createEditor);
+    transition.begin("file.ts", { x: 0, y: 0 }, { lineNumber: 1, column: 1 });
+    transition.takeFrameSwap();
+    editor.value = "const answer = 43;\n";
+    setTilesCurrent(false);
+    transition.end("escape");
+
+    reportRasterError();
+
+    assertions.equal(transition.takeFrameSwap()?.direction, "exit");
+    assertions.true(!editor.visible);
+    assertions.true(!editor.isOpen);
+  });
 }
 
 function registerEditorPortTests(
@@ -156,5 +233,13 @@ function registerEditorPortTests(
     transition.begin("file.ts", { x: 0, y: 0 }, { lineNumber: 1, column: 1 });
     editor.value = "one\ntwo\nthree\n";
     assertions.equal(editor.getLineCount(), 4);
+  });
+
+  run("reports content changes since opening through the editor host", () => {
+    const { editor, transition } = setup(createEditor);
+    transition.begin("file.ts", { x: 0, y: 0 }, { lineNumber: 1, column: 1 });
+    assertions.true(!editor.hasContentChanged());
+    editor.value = "changed";
+    assertions.true(editor.hasContentChanged());
   });
 }

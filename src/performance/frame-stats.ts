@@ -19,6 +19,12 @@ export interface FrameStatsSnapshot extends FrameStageStats {
   readonly longIntervalCount: Statistic;
   readonly frameCount: number;
   readonly stages: Readonly<Record<string, FrameStageStats>>;
+  // Text Tiles metrics (design D6 "Tile pool", "Zoom"): the latest reported
+  // tile pool memory footprint and settle duration, and how many sampled
+  // frames had a visible tile area with nothing resident at any scale.
+  readonly tileMemoryBytes: Statistic;
+  readonly missingTileFrameCount: number;
+  readonly timeToSharpMs: Statistic;
 }
 
 interface StageSamples {
@@ -34,6 +40,9 @@ export class FrameStats {
   private sampleCount = 0;
   private totalSampleCount = 0;
   private previousFrameStart: number | undefined;
+  private latestTileMemoryBytes: number | undefined;
+  private missingTileFrameCount = 0;
+  private latestTimeToSharpMs: number | undefined;
 
   constructor(private readonly capacity = DEFAULT_CAPACITY) {
     if (!Number.isInteger(capacity) || capacity < 1) {
@@ -54,6 +63,19 @@ export class FrameStats {
       stage.values[this.writeIndex] = timing.durationMs;
       stage.present[this.writeIndex] = 1;
     }
+    if (
+      sample.tileMemoryBytes !== undefined &&
+      !Number.isNaN(sample.tileMemoryBytes)
+    ) {
+      this.latestTileMemoryBytes = sample.tileMemoryBytes;
+    }
+    if (sample.missingTile) this.missingTileFrameCount += 1;
+    if (
+      sample.timeToSharpMs !== undefined &&
+      !Number.isNaN(sample.timeToSharpMs)
+    ) {
+      this.latestTimeToSharpMs = sample.timeToSharpMs;
+    }
     this.writeIndex = (this.writeIndex + 1) % this.capacity;
     this.sampleCount = Math.min(this.sampleCount + 1, this.capacity);
     this.totalSampleCount += 1;
@@ -68,6 +90,9 @@ export class FrameStats {
     this.sampleCount = 0;
     this.totalSampleCount = 0;
     this.previousFrameStart = undefined;
+    this.latestTileMemoryBytes = undefined;
+    this.missingTileFrameCount = 0;
+    this.latestTimeToSharpMs = undefined;
   }
 
   snapshot(): FrameStatsSnapshot {
@@ -82,6 +107,9 @@ export class FrameStats {
       longIntervalCount: countLongIntervals(intervals),
       frameCount: this.totalSampleCount,
       stages,
+      tileMemoryBytes: this.latestTileMemoryBytes ?? UNAVAILABLE,
+      missingTileFrameCount: this.missingTileFrameCount,
+      timeToSharpMs: this.latestTimeToSharpMs ?? UNAVAILABLE,
     };
   }
 

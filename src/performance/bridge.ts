@@ -7,6 +7,13 @@ export {
   UNAVAILABLE,
 } from "./frame-statistics";
 export type { Statistic } from "./frame-statistics";
+// perf/ may only import src/ through this file; re-exporting the pinch gain
+// constants keeps the driver's synthetic pinch deltas numerically consistent
+// with the product's zoom handler without perf/ reaching into src/shared/.
+export {
+  MAX_ZOOM_STEP_LN,
+  PINCH_WHEEL_DELTA_PER_LN_SCALE,
+} from "../shared/pinch";
 
 export interface PerfFile {
   readonly path: string;
@@ -23,6 +30,8 @@ export interface PerfBridge {
   ): Statistic;
   openFolder(files: readonly PerfFile[]): Promise<void>;
   setCamera(x: number, y: number, scale: number): void;
+  camera(): { x: number; y: number; scale: number };
+  cameraRange(): { minScale: number; maxScale: number };
   setSyntheticLoad(load: {
     readonly cpuMs: number;
     readonly gpuIterations: number;

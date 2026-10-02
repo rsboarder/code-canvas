@@ -3,15 +3,23 @@ import { countLongIntervals, nearestRank } from "./frame-statistics";
 import type { PerfBridge, PerfFile } from "./bridge";
 import { createInMemoryDirectory } from "./file-system-access-mock";
 
+interface HarnessCameraTelemetry {
+  camera: PerfBridge["camera"];
+  cameraRange: PerfBridge["cameraRange"];
+  resetCameraRange(): void;
+}
+
 export function installPerfBridge(
   frameStats: FrameStats,
   setCamera: PerfBridge["setCamera"],
+  cameraTelemetry: HarnessCameraTelemetry,
   setSyntheticLoad: PerfBridge["setSyntheticLoad"],
 ): void {
   const bridge: PerfBridge = {
     snapshot: () => frameStats.snapshot(),
     reset: () => {
       frameStats.reset();
+      cameraTelemetry.resetCameraRange();
     },
     nearestRank,
     countLongIntervals,
@@ -26,6 +34,8 @@ export function installPerfBridge(
       return Promise.resolve();
     },
     setCamera,
+    camera: cameraTelemetry.camera,
+    cameraRange: cameraTelemetry.cameraRange,
     setSyntheticLoad,
   };
   window.__perf = bridge;

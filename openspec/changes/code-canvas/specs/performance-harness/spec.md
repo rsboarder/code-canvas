@@ -69,14 +69,18 @@ For each scenario, the harness SHALL collect from the browser trace and from the
 - **THEN** the report contains all of the listed metrics, or an explicit mark that a metric is unavailable
 
 ### Requirement: Warm-up and repetitions
-Each scenario SHALL be played back a configured number of times after a warm-up; the verdict SHALL be based on the worst run, and the report SHALL show the spread across runs.
+Each scenario SHALL be played back a configured number of times after a warm-up. A metric compared against the noise floor (frame counts and long intervals) SHALL fail the scenario only when a majority of the measured runs exceed its allowance (requirement "Budgets and verdict"); absolute budgets, such as the application-task limit and baseline regressions, SHALL be judged on the worst run. The report SHALL show the worst run and the spread across runs.
 
 #### Scenario: One bad run out of five
-- **WHEN** one of five runs of a scenario has a dropped frame
+- **WHEN** one of five runs of a scenario has a dropped frame, the other four have none, and the noise floor is zero
+- **THEN** the scenario passes, and the report shows that run's dropped frame
+
+#### Scenario: A drop that repeats
+- **WHEN** three of five runs of a scenario each have a dropped frame and the noise floor is zero
 - **THEN** the scenario is considered failed
 
 ### Requirement: Budgets and verdict
-Threshold values SHALL be stored in a version-controlled configuration file, defaulting to the `performance-budget` budget; thresholds for frame counts and long intervals SHALL be compared against the noise floor of the same session. The command SHALL exit with a non-zero code if at least one scenario violates a threshold, and SHALL name the scenario, the metric, the threshold, and the actual value.
+Threshold values SHALL be stored in a version-controlled configuration file, defaulting to the `performance-budget` budget; thresholds for frame counts and long intervals SHALL be compared against the noise floor of the same session, taken as the one-sided 95% Poisson upper bound of the floor's per-minute rate and scaled to the run's duration. The command SHALL exit with a non-zero code if at least one scenario violates a threshold, and SHALL name the scenario, the metric, the threshold, and the actual value.
 
 #### Scenario: Budget violation
 - **WHEN** in the pan scenario an application task takes 9.1 ms against a threshold of 8 ms

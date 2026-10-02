@@ -21,6 +21,13 @@ export interface TextMetricsProbe {
 const METRIC_PRECISION = 1000;
 const NARROW_PROBE_LENGTH = 256;
 
+// The character Text Metrics measures its narrow advance from (D6 "Text
+// Metrics"); each raster worker measures the same character with the same
+// font at start-up and compares against this module's narrowAdvance, so a
+// font substitution the worker's engine made silently is caught instead of
+// drawing with a fallback font (D6 "Raster workers").
+export const PROBE_CHARACTER = "0";
+
 export function roundMetric(value: number): number {
   return Math.round(value * METRIC_PRECISION) / METRIC_PRECISION;
 }
@@ -67,7 +74,7 @@ export function createTextMetrics(
   probe.style.visibility = "hidden";
   probe.style.pointerEvents = "none";
   probe.style.whiteSpace = "pre";
-  probe.textContent = "0".repeat(NARROW_PROBE_LENGTH);
+  probe.textContent = PROBE_CHARACTER.repeat(NARROW_PROBE_LENGTH);
   documentRef.body.append(probe);
   const narrowAdvance = roundMetric(
     probe.getBoundingClientRect().width / NARROW_PROBE_LENGTH,
@@ -75,7 +82,7 @@ export function createTextMetrics(
   probe.remove();
 
   configureCanvasFont(context, font);
-  const bounds = context.measureText("0");
+  const bounds = context.measureText(PROBE_CHARACTER);
   const baseline = roundMetric(
     calculateBaseline(
       font.lineHeight,
@@ -105,12 +112,20 @@ function configureFontStyle(font: FontDefinition): Record<string, string> {
   };
 }
 
-function configureCanvasFont(
-  context: CanvasRenderingContext2D,
+// Satisfied by both CanvasRenderingContext2D and
+// OffscreenCanvasRenderingContext2D, so the raster worker (D6 "Raster
+// workers") configures its font identically to this module's own
+// measurement context for the start-up font check.
+interface FontConfigurableContext {
+  font: string;
+}
+
+export function configureCanvasFont(
+  context: FontConfigurableContext,
   font: FontDefinition,
 ): void {
   context.font = `${String(font.size)}px ${font.family}`;
-  const configurable = context as CanvasRenderingContext2D & {
+  const configurable = context as FontConfigurableContext & {
     fontKerning?: CanvasFontKerning;
     letterSpacing?: string;
   };

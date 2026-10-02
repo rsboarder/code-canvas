@@ -78,8 +78,13 @@ The hot path is everything that runs every frame or on every input event: `rende
 
 A task is done when:
 1. `pnpm check` is green and e2e for the affected scenarios are green.
-2. For tasks touching rendering, input, the frame loop, or background work: `pnpm perf:stages` is green while iterating, and the full `pnpm perf` is green on the reference machine before closing. If you cannot run the full measurement, ask the human to run `pnpm perf` and attach the report path.
+2. For tasks touching rendering, input, the frame loop, or background work: `pnpm perf:stages` is green while iterating, and the task closes only with a green full `pnpm perf` on the reference machine and that run's report path in the task report. If you cannot run the full measurement, ask the human to run `pnpm perf` and attach the report path they give you.
 3. The task report contains: what was done; gate output (exit code, test count); the harness report path if required; what remains unverified — stated plainly, without softening.
+
+## Measurement cadence
+
+- While changes to rendering, input, the frame loop or background work are landing, the full `pnpm perf` runs on the reference machine at least twice a day, not only when a task closes.
+- Once a week the human records a DevTools trace of real trackpad gestures on the reference machine — pan, pinch, and scroll inside a widget — and commits it as `perf/acceptance/weekly/<YYYY-MM-DD>-<gesture>.json.gz`. Its dropped and partially presented frames are compared with the latest full harness report of the matching scenario. If the real trace is worse, the harness gestures miss something real input does: record the difference in `perf/ENVIRONMENT.md` and treat the harness verdicts for that gesture as unconfirmed until a harness scenario reproduces it.
 
 ## Stop points — stop and ask the human
 

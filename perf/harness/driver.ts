@@ -1,8 +1,21 @@
 import type { CDPSession } from "@playwright/test";
 
+import { PINCH_WHEEL_DELTA_PER_LN_SCALE } from "../../src/performance/bridge";
 import type { Scenario, ScenarioStep } from "../scenarios/schema";
 
 const WAIT_METHOD = "wait";
+// A rejected/never-resolving ack must still fail the run instead of hanging
+// the harness forever; 3x the planned duration gives slow-but-real gestures
+// room, and the +5s padding covers short scenarios.
+const ACK_CAP_DURATION_MULTIPLIER = 3;
+const ACK_CAP_PADDING_MS = 5_000;
+
+export class GestureCapExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GestureCapExceededError";
+  }
+}
 
 export interface DriverEvent {
   readonly atMs: number;
@@ -42,12 +55,23 @@ export function planEvents(
   return events;
 }
 
+// Sends every planned event at its scheduled time without awaiting its CDP
+// acknowledgement in line: awaiting each ack serialized gestures at ~45ms per
+// event in spike H2 (5x the plan), which made frame numbers look better than
+// they are. Acks are collected and awaited together, capped so a rejected or
+// hung ack fails the run instead of blocking it forever. Returns the
+// gesture's wall time: first planned event to last ack.
 export async function runEvents(
   cdp: CDPSession,
   events: readonly DriverEvent[],
   clock: DriverClock = systemClock,
-): Promise<void> {
+): Promise<number> {
+  const plannedDurationMs = events.reduce(
+    (max, event) => Math.max(max, event.atMs),
+    0,
+  );
   const startedAt = clock.now();
+  const acks: Promise<unknown>[] = [];
   for (const event of events) {
     const targetTime = startedAt + event.atMs;
     const remaining = targetTime - clock.now();
@@ -56,9 +80,41 @@ export async function runEvents(
       await clock.sleep(readWaitMilliseconds(event));
       continue;
     }
-    await cdp.send(event.method as Parameters<CDPSession["send"]>[0], {
-      ...event.params,
-    });
+    acks.push(
+      cdp.send(event.method as Parameters<CDPSession["send"]>[0], {
+        ...event.params,
+      }),
+    );
+  }
+  await awaitAcksWithCap(
+    acks,
+    ACK_CAP_DURATION_MULTIPLIER * plannedDurationMs + ACK_CAP_PADDING_MS,
+  );
+  return clock.now() - startedAt;
+}
+
+async function awaitAcksWithCap(
+  acks: readonly Promise<unknown>[],
+  capMs: number,
+): Promise<void> {
+  if (acks.length === 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.all(acks),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new GestureCapExceededError(
+              `gesture acks did not resolve within the ${String(capMs)} ms cap ` +
+                `(${String(ACK_CAP_DURATION_MULTIPLIER)}x planned duration + ${String(ACK_CAP_PADDING_MS)} ms)`,
+            ),
+          );
+        }, capMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -148,7 +204,11 @@ function continuousParams(
     x: step.x,
     y: step.y,
     deltaX: 0,
-    deltaY: ((step.scaleFactor - 1) * -100) / count,
+    // Chrome turns a trackpad pinch into ctrl+wheel with
+    // deltaY = -K * ln(scale); matching that here is what lets the runner's
+    // honesty check compare the final camera against the planned one.
+    deltaY:
+      (-PINCH_WHEEL_DELTA_PER_LN_SCALE * Math.log(step.scaleFactor)) / count,
     modifiers: 2,
   };
 }

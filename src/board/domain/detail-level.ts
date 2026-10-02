@@ -19,7 +19,11 @@ export class DetailLevel {
     return this._value;
   }
 
-  update(onScreenLineHeight: number): DetailLevelName {
+  textWanted(onScreenLineHeight: number): boolean {
+    return onScreenLineHeight > this.thresholds.minimapToText;
+  }
+
+  update(onScreenLineHeight: number, textReady: boolean): DetailLevelName {
     if (
       this._value === "text" &&
       onScreenLineHeight < this.thresholds.textToMinimap
@@ -27,10 +31,15 @@ export class DetailLevel {
       this._value = "minimap";
     } else if (
       this._value === "minimap" &&
-      onScreenLineHeight > this.thresholds.minimapToText
+      onScreenLineHeight > this.thresholds.minimapToText &&
+      textReady
     ) {
       this._value = "text";
     }
     return this._value;
+  }
+
+  textThresholdZoom(baseLineHeight: number, devicePixelRatio: number): number {
+    return this.thresholds.minimapToText / (baseLineHeight * devicePixelRatio);
   }
 }

@@ -319,6 +319,9 @@ export const moduleMap = {
       "index.html",
       "src/rendering/frame-loop.ts",
       "src/rendering/index.ts",
+      "src/shared/geometry/index.ts",
+      "src/shared/domain/index.ts",
+      "src/shared/events/index.ts",
     ],
     projectPatterns: [
       "src/**/*.{ts,tsx}",

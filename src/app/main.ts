@@ -8,11 +8,13 @@ import { EditingTransition, type EditingSource } from "../editing/index";
 import { createMonacoEditorHost } from "../editing/infrastructure/monaco-editor-host";
 import { GestureInput } from "../interaction/input";
 import { FrameStats } from "../performance/frame-stats";
+import { FrameLog } from "./frame-log";
 import {
   createTextMetrics,
   FrameLoop,
   WebGlRenderer,
   type CodeTextMetrics,
+  type FrameStage,
   type TextMetricsProbe,
 } from "../rendering/index";
 import { DEFAULT_CODE_FONT } from "../shared/font";
@@ -24,6 +26,9 @@ import { openSourceFile } from "../workspace/infrastructure/directory-reader";
 
 interface CodeCanvasTestHook {
   textMetrics(): TextMetricsProbe;
+  tileDebug(): ReturnType<WebGlRenderer["debugSnapshot"]>;
+  frameLog(): ReturnType<FrameLog["snapshot"]>;
+  setCamera(x: number, y: number, scale: number): void;
 }
 
 declare global {
@@ -81,12 +86,14 @@ const input = new GestureInput();
 const tokenizer = new WorkerTokenizer();
 const residency = new DocumentResidency(tokenizer);
 const frameStats = new FrameStats();
+const frameLog = new FrameLog();
 let renderer: WebGlRenderer | undefined;
 let frameLoop: FrameLoop | undefined;
 let editing: EditingTransition | undefined;
 let editorHost: Awaited<ReturnType<typeof createMonacoEditorHost>> | undefined;
 let widgetFrame: Rect | undefined;
 let currentSource: EditingSource | undefined;
+let editorVisible = false;
 
 function setCanvasAttribute(name: string, value: string): void {
   if (canvas.getAttribute(name) !== value) canvas.setAttribute(name, value);
@@ -113,12 +120,22 @@ function updateWidgetBodyRect(): void {
 function applyHarnessCamera(x: number, y: number, scale: number): void {
   camera.setPosition({ x, y }, scale);
   updateWidgetBodyRect();
+  const onScreenLineHeight =
+    codeFont.lineHeight * camera.scale * (window.devicePixelRatio || 1);
   const level = detail.update(
-    codeFont.lineHeight * camera.scale * (window.devicePixelRatio || 1),
+    onScreenLineHeight,
+    renderer?.textReady() ?? false,
   );
   setCanvasAttribute("data-detail-level", level);
-  renderer?.setDetailLevel(level);
+  renderer?.setDetailLevel(
+    level,
+    level === "minimap" && detail.textWanted(onScreenLineHeight),
+  );
   frameLoop?.invalidate();
+}
+
+function readHarnessCamera(): { x: number; y: number; scale: number } {
+  return { x: camera.offsetX, y: camera.offsetY, scale: camera.scale };
 }
 
 function editorBounds(): Rect {
@@ -139,7 +156,20 @@ function exposeEditorPosition(): void {
 
 function applyInput(): void {
   if (!frameLoop || !renderer) return;
+  if (editing?.isExitHeld) return;
   const gesture = input.consume();
+  const zoomingInFromMinimap =
+    detail.value === "minimap" &&
+    gesture.zoomFactor > 1 &&
+    input.isZoomGestureActive();
+  if (zoomingInFromMinimap) {
+    renderer.beginTextPrefetch(
+      detail.textThresholdZoom(
+        codeFont.lineHeight,
+        window.devicePixelRatio || 1,
+      ),
+    );
+  }
   let cameraChanged = false;
   if (gesture.panX || gesture.panY) {
     panCamera(camera, gesture.panX, gesture.panY);
@@ -150,11 +180,26 @@ function applyInput(): void {
     cameraChanged = true;
   }
   if (cameraChanged) updateWidgetBodyRect();
-  const level = detail.update(
-    codeFont.lineHeight * camera.scale * (window.devicePixelRatio || 1),
-  );
+  const onScreenLineHeight =
+    codeFont.lineHeight * camera.scale * (window.devicePixelRatio || 1);
+  const level = detail.update(onScreenLineHeight, renderer.textReady());
   setCanvasAttribute("data-detail-level", level);
-  renderer.setDetailLevel(level);
+  renderer.setDetailLevel(
+    level,
+    level === "minimap" && detail.textWanted(onScreenLineHeight),
+  );
+  renderer.setGestureInProgress(input.isGestureInProgress());
+  renderer.setZoomGestureActive(input.isZoomGestureActive());
+  renderer.setZoomFocus(
+    input.zoomFocusX(),
+    input.zoomFocusY(),
+    input.zoomDirectionSign() < 0,
+  );
+}
+
+function reportRasterError(): void {
+  const error = renderer?.rasterError();
+  if (error && status.textContent !== error) status.textContent = error;
 }
 
 function applyEditingSwap(): void {
@@ -168,15 +213,16 @@ function applyEditingSwap(): void {
       swap.source.text,
       swap.source.frame,
     );
-    residency.prioritize(swap.source.widgetId);
   }
   renderer.setWidgetVisible(swap.direction === "exit");
+  editorVisible = swap.direction === "enter";
   setCanvasAttribute("data-editing", String(swap.direction === "enter"));
   if (swap.direction === "enter") {
     updateWidgetBodyRect();
     exposeEditorPosition();
     editorHost?.focus();
   }
+  if (swap.direction === "exit") applyInput();
 }
 
 function readSource(widgetId: string): EditingSource | undefined {
@@ -239,6 +285,12 @@ function installDevTestHook(): void {
       if (!renderer) throw new Error("Renderer is not ready");
       return renderer.getTextMetricsProbe();
     },
+    tileDebug: () => {
+      if (!renderer) throw new Error("Renderer is not ready");
+      return renderer.debugSnapshot();
+    },
+    frameLog: () => frameLog.snapshot(),
+    setCamera: applyHarnessCamera,
   };
 }
 
@@ -279,6 +331,101 @@ async function openFolder(): Promise<void> {
   frameLoop?.invalidate();
 }
 
+function wireEditing(host: NonNullable<typeof editorHost>): void {
+  editing = new EditingTransition({
+    camera,
+    editor: host,
+    residency,
+    readSource,
+    tilesCurrent: (widgetId, contentVersion) =>
+      renderer?.tilesCurrentFor(widgetId, contentVersion) ?? false,
+    onContentChanged: (source) => {
+      currentSource = source;
+      renderer?.setDocument(
+        source.widgetId,
+        source.path,
+        source.text,
+        source.frame,
+      );
+      setCanvasAttribute("data-content-version", String(source.contentVersion));
+      setCanvasAttribute("data-highlighted", "false");
+    },
+  });
+  host.onEscape(() => {
+    if (!editing?.isEditing) return;
+    editing.end("escape");
+    frameLoop?.invalidate();
+  });
+}
+
+function createFrameStages(): FrameStage[] {
+  const stages: FrameStage[] = [
+    { name: "apply-input", run: applyInput },
+    { name: "report-raster-error", run: reportRasterError },
+    { name: "editing-swap", run: applyEditingSwap },
+    {
+      name: "residency-drain",
+      run: () => {
+        if (!renderer) return;
+        residency.drain(2, renderer);
+        // Posting raster jobs and uploading returned tiles runs in this same
+        // budgeted slot (design D7 "GpuUploader"), not from the raster
+        // worker's message handler.
+        const uploadedTiles = renderer.drainTiles(camera);
+        if (uploadedTiles > 0) frameLoop?.invalidate();
+      },
+    },
+    {
+      name: "draw",
+      run: () => {
+        const metrics = renderer?.draw(camera);
+        if (metrics) frameLoop?.setFrameMetrics(metrics);
+      },
+    },
+  ];
+  if (import.meta.env.DEV)
+    stages.push({ name: "frame-log", run: recordFrameLog });
+  return stages;
+}
+
+function recordFrameLog(): void {
+  if (!renderer) return;
+  const metrics = renderer.frameMetrics();
+  frameLog.record(metrics, {
+    cameraOffsetX: camera.offsetX,
+    cameraOffsetY: camera.offsetY,
+    cameraScale: camera.scale,
+    detailLevel: detail.value === "minimap" ? 1 : 0,
+    onScreenLineHeight:
+      codeFont.lineHeight * camera.scale * (window.devicePixelRatio || 1),
+    textReady: renderer.textReady(),
+    editorVisible,
+  });
+}
+
+function wireInput(): void {
+  input.attach(
+    canvas,
+    () => frameLoop?.invalidate(),
+    (kind) => {
+      if (!editing?.isEditing) return;
+      editing.end(kind === "zoom" ? "zoom" : "pan", { kind });
+      frameLoop?.invalidate();
+    },
+    (inProgress, wasZoom) => {
+      frameLoop?.setGestureInProgress(inProgress);
+      if (!inProgress) {
+        renderer?.notifyGestureEnded(wasZoom, camera.scale);
+        // The gesture-end callback fires from a timer, not a FrameLoop tick
+        // (design D8): without this, a loop that went idle the instant the
+        // gesture ended would never run the tick that starts the zoom
+        // settle's re-raster (design D6 "Zoom").
+        frameLoop?.invalidate();
+      }
+    },
+  );
+}
+
 async function start(): Promise<void> {
   try {
     editorHost = await createMonacoEditorHost(
@@ -301,58 +448,18 @@ async function start(): Promise<void> {
     themePalette.background,
   );
   if (import.meta.env.DEV) installDevTestHook();
-  if (editorHost) {
-    editing = new EditingTransition({
-      camera,
-      editor: editorHost,
-      residency,
-      readSource,
-      onContentChanged: (source) => {
-        currentSource = source;
-        setCanvasAttribute(
-          "data-content-version",
-          String(source.contentVersion),
-        );
-        setCanvasAttribute("data-highlighted", "false");
-      },
-    });
-    editorHost.onEscape(() => {
-      if (!editing?.isEditing) return;
-      editing.end("escape");
-      frameLoop?.invalidate();
-    });
-  }
-  frameLoop = new FrameLoop(
-    [
-      { name: "apply-input", run: applyInput },
-      { name: "editing-swap", run: applyEditingSwap },
-      {
-        name: "residency-drain",
-        run: () => {
-          if (renderer) residency.drain(2, renderer);
-        },
-      },
-      { name: "draw", run: () => renderer?.draw(camera) },
-    ],
-    (sample) => {
-      frameStats.record(sample);
-    },
-  );
+  if (editorHost) wireEditing(editorHost);
+  frameLoop = new FrameLoop(createFrameStages(), (sample) => {
+    frameStats.record(sample);
+  });
+  renderer.onNeedsRedraw(() => frameLoop?.invalidate());
   void installHarnessBridge();
   tokenizer.subscribe((result: TokenizedLines) => {
     if (!residency.receiveTokens(result)) return;
     setCanvasAttribute("data-highlighted", "true");
     frameLoop?.invalidate();
   });
-  input.attach(
-    canvas,
-    () => frameLoop?.invalidate(),
-    (kind) => {
-      if (!editing?.isEditing) return;
-      editing.end(kind === "zoom" ? "zoom" : "pan", { kind });
-      frameLoop?.invalidate();
-    },
-  );
+  wireInput();
   canvas.addEventListener("dblclick", beginEditing);
   openButton.addEventListener("click", () => void openFolder());
   window.addEventListener("resize", () => frameLoop?.invalidate());
@@ -361,12 +468,17 @@ async function start(): Promise<void> {
 
 async function installHarnessBridge(): Promise<void> {
   if (import.meta.env.VITE_PERF_HARNESS !== "1") return;
-  const [{ installPerfBridge }, { createSyntheticLoadStage }, gpuModule] =
-    await Promise.all([
-      import("../performance/install-bridge"),
-      import("../performance/synthetic-load"),
-      import("../rendering/synthetic-gpu-load"),
-    ]);
+  const [
+    { installPerfBridge },
+    { createSyntheticLoadStage },
+    { createCameraRangeStage },
+    gpuModule,
+  ] = await Promise.all([
+    import("../performance/install-bridge"),
+    import("../performance/synthetic-load"),
+    import("../performance/camera-range"),
+    import("../rendering/synthetic-gpu-load"),
+  ]);
   const gpuLoad = new gpuModule.default(canvas);
   const stage = createSyntheticLoadStage(
     (iterations) => {
@@ -376,10 +488,21 @@ async function installHarnessBridge(): Promise<void> {
       frameLoop?.invalidate();
     },
   );
+  const cameraRangeStage = createCameraRangeStage(() => camera.scale);
   frameLoop?.addStage(stage);
-  installPerfBridge(frameStats, applyHarnessCamera, (load) => {
-    stage.setLoad(load);
-  });
+  frameLoop?.addStage(cameraRangeStage);
+  installPerfBridge(
+    frameStats,
+    applyHarnessCamera,
+    {
+      camera: readHarnessCamera,
+      cameraRange: cameraRangeStage.range,
+      resetCameraRange: cameraRangeStage.reset,
+    },
+    (load) => {
+      stage.setLoad(load);
+    },
+  );
 }
 
 void start();

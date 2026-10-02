@@ -1,7 +1,9 @@
 import { gzipSync } from "node:zlib";
 
+import { evaluateFloorMetric } from "./floor-verdict";
 import type { EnvironmentReport } from "./environment";
 import type { NoiseFloor } from "./preflight";
+import type { FrameCounts } from "./trace";
 
 export type HarnessMode = "full" | "stages";
 export type HarnessVerdict = "passed" | "failed" | "invalid" | "stage-passed";
@@ -16,13 +18,55 @@ export interface BudgetConfig {
   readonly stageBudgets?: Readonly<Record<string, number>>;
 }
 
+export interface GestureTiming {
+  readonly wallTimeMs: number;
+  readonly plannedDurationMs: number;
+  readonly ratio: number;
+}
+
+export interface CameraSample {
+  readonly x: number;
+  readonly y: number;
+  readonly scale: number;
+}
+
+export interface CameraCheck {
+  readonly checked: boolean;
+  readonly planned?: CameraSample;
+  readonly actual?: CameraSample;
+  readonly withinTolerance?: boolean;
+}
+
+export interface CameraRangeSample {
+  readonly minScale: number;
+  readonly maxScale: number;
+}
+
+export interface CameraRangeCheck {
+  readonly checked: boolean;
+  readonly planned?: CameraRangeSample;
+  readonly recorded?: CameraRangeSample;
+  readonly withinTolerance?: boolean;
+}
+
 export interface ScenarioRunMetrics {
   readonly applicationTaskMs: ReportStatistic;
   readonly p99: ReportStatistic;
   readonly droppedFrames: number;
   readonly partiallyPresentedFrames: number;
   readonly longIntervals: number;
+  readonly frames?: {
+    readonly trace: FrameCounts;
+    readonly window: FrameCounts;
+  };
   readonly stages?: Readonly<Record<string, { readonly p99: ReportStatistic }>>;
+  readonly gesture?: GestureTiming;
+  readonly camera?: CameraCheck;
+  readonly cameraRange?: CameraRangeCheck;
+  readonly tileMemoryBytes?: ReportStatistic;
+  readonly tileMemoryMiB?: ReportStatistic;
+  readonly missingTileFrameCount?: number;
+  readonly timeToSharpMs?: ReportStatistic;
 }
 
 export interface ScenarioRun {
@@ -41,6 +85,7 @@ export interface Violation {
   readonly metric: string;
   readonly threshold: number;
   readonly actual: number;
+  readonly runsOverAllowance?: number;
 }
 
 export interface Regression {
@@ -59,6 +104,16 @@ export interface ScenarioEvaluation {
   readonly regressions: readonly Regression[];
   readonly baseline: Readonly<Record<string, ReportStatistic>> | "no baseline";
   readonly invalidMetrics: readonly string[];
+  readonly floorRelativeMetrics: readonly FloorRelativeMetric[];
+}
+
+interface FloorRelativeMetric {
+  readonly metric: string;
+  readonly allowancePerRun: number;
+  readonly actualAtMajorityRank: number;
+  readonly runsOverAllowance: number;
+  readonly runCount: number;
+  readonly fails: boolean;
 }
 
 export interface HarnessReport {
@@ -84,17 +139,6 @@ export interface HarnessReport {
       }[];
     }[];
   };
-}
-
-function noiseFloorFrameAllowance(
-  noiseFloor: NoiseFloor,
-  durationMs: number,
-): number {
-  return (
-    (noiseFloor.droppedFramesPerMinute +
-      noiseFloor.partiallyPresentedFramesPerMinute) *
-    (durationMs / 60_000)
-  );
 }
 
 interface EvaluateScenarioOptions {
@@ -123,22 +167,28 @@ export function evaluateScenario({
     assessment: violationsForRun({
       run,
       budgets,
-      noiseFloor,
-      durationMs,
       stageTiming,
     }),
   }));
   const worst = evaluations.reduce((current, candidate) =>
-    candidate.assessment.violations.length >
-    current.assessment.violations.length
-      ? candidate
-      : current,
+    compareWorstRuns(current, candidate) > 0 ? candidate : current,
   );
   const invalidMetrics = unique(
     evaluations.flatMap(
       (evaluation) => evaluation.assessment.unavailableMetrics,
     ),
   );
+  const floorRelativeMetrics = stageTiming
+    ? []
+    : evaluateFloorMetrics(runs, noiseFloor, durationMs);
+  const floorViolations = floorRelativeMetrics
+    .filter((metric) => metric.fails)
+    .map((metric) => ({
+      metric: metric.metric,
+      threshold: metric.allowancePerRun,
+      actual: metric.actualAtMajorityRank,
+      runsOverAllowance: metric.runsOverAllowance,
+    }));
   const regressions = baselineRegressions(
     scenario,
     worst.run.metrics,
@@ -151,16 +201,88 @@ export function evaluateScenario({
     verdict:
       invalidMetrics.length > 0
         ? "invalid"
-        : worst.assessment.violations.length > 0 || regressions.length > 0
+        : worst.assessment.violations.length > 0 ||
+            floorViolations.length > 0 ||
+            regressions.length > 0
           ? "failed"
           : "passed",
     worstRun: worst.run,
     runs,
-    violations: worst.assessment.violations,
+    violations: [...worst.assessment.violations, ...floorViolations],
     regressions,
     baseline: prior,
     invalidMetrics,
+    floorRelativeMetrics,
   };
+}
+
+function evaluateFloorMetrics(
+  runs: readonly ScenarioRun[],
+  noiseFloor: NoiseFloor,
+  durationMs: number,
+): FloorRelativeMetric[] {
+  const metrics = [
+    {
+      metric: "droppedOrPartiallyPresentedFrames",
+      floorPerMinute:
+        noiseFloor.droppedFramesPerMinute +
+        noiseFloor.partiallyPresentedFramesPerMinute,
+      values: runs.map(
+        (run) =>
+          run.metrics.droppedFrames + run.metrics.partiallyPresentedFrames,
+      ),
+    },
+    {
+      metric: "longIntervals",
+      floorPerMinute: noiseFloor.intervalsOver12_5MsPerMinute,
+      values: runs.map((run) => run.metrics.longIntervals),
+    },
+  ];
+  return metrics.map(({ metric, floorPerMinute, values }) => {
+    const verdict = evaluateFloorMetric(values, floorPerMinute, durationMs);
+    return {
+      metric,
+      allowancePerRun: verdict.allowancePerRun,
+      actualAtMajorityRank: verdict.actualAtMajorityRank,
+      runsOverAllowance: verdict.runsOverAllowance,
+      runCount: verdict.runCount,
+      fails: verdict.fails,
+    };
+  });
+}
+
+function compareWorstRuns(
+  current: { readonly run: ScenarioRun; readonly assessment: RunAssessment },
+  candidate: { readonly run: ScenarioRun; readonly assessment: RunAssessment },
+): number {
+  const absolute =
+    candidate.assessment.violations.length -
+    current.assessment.violations.length;
+  if (absolute !== 0) return absolute;
+  const candidateFrames = frameCount(candidate.run);
+  const currentFrames = frameCount(current.run);
+  if (candidateFrames !== currentFrames) return candidateFrames - currentFrames;
+  const longIntervals =
+    candidate.run.metrics.longIntervals - current.run.metrics.longIntervals;
+  if (longIntervals !== 0) return longIntervals;
+  return compareHigher(
+    numericMetric(candidate.run.metrics.p99),
+    numericMetric(current.run.metrics.p99),
+  );
+}
+
+function frameCount(run: ScenarioRun): number {
+  return run.metrics.droppedFrames + run.metrics.partiallyPresentedFrames;
+}
+
+function numericMetric(value: ReportStatistic): number {
+  return typeof value === "number" ? value : Number.NEGATIVE_INFINITY;
+}
+
+function compareHigher(candidate: number, current: number): number {
+  if (candidate > current) return 1;
+  if (candidate < current) return -1;
+  return 0;
 }
 
 interface RunAssessment {
@@ -171,11 +293,9 @@ interface RunAssessment {
 function violationsForRun(options: {
   readonly run: ScenarioRun;
   readonly budgets: BudgetConfig;
-  readonly noiseFloor: NoiseFloor;
-  readonly durationMs: number;
   readonly stageTiming: boolean;
 }): RunAssessment {
-  const { run, budgets, noiseFloor, durationMs, stageTiming } = options;
+  const { run, budgets, stageTiming } = options;
   const violations: Violation[] = [];
   const unavailableMetrics: string[] = [];
   if (
@@ -194,20 +314,6 @@ function violationsForRun(options: {
       run.metrics,
       budgets.stageBudgets,
     );
-  if (!stageTiming) {
-    addMaximum(
-      violations,
-      "droppedOrPartiallyPresentedFrames",
-      run.metrics.droppedFrames + run.metrics.partiallyPresentedFrames,
-      noiseFloorFrameAllowance(noiseFloor, durationMs),
-    );
-    addMaximum(
-      violations,
-      "longIntervals",
-      run.metrics.longIntervals,
-      noiseFloor.intervalsOver12_5MsPerMinute * (durationMs / 60_000),
-    );
-  }
   return { violations, unavailableMetrics };
 }
 
@@ -302,13 +408,14 @@ export function renderMarkdownReport(report: HarnessReport): string {
     `Verdict: ${report.verdict}`,
     ``,
   ];
+  if (!report.frameMeasurement)
+    lines.push(
+      "Stage-specific numeric budgets were not specified; stage mode checks the 8 ms application-task budget only.",
+      "",
+    );
   lines.push(
-    "| Scenario | Verdict | Worst application task (ms) | p99 (ms) | Delta |",
-    "|---|---:|---:|---:|---:|",
-  );
-  lines.push(
-    "",
-    "Stage-specific numeric budgets were not specified; stage mode checks the 8 ms application-task budget only.",
+    "| Scenario | Verdict | Worst application task (ms) | p99 (ms) | Dropped/partial over floor | Long intervals over floor | Tile memory (bytes) | Tile memory (MiB) | Missing-tile frames | Time to sharp (ms) | Delta |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
   );
   for (const scenario of report.scenarios) {
     const metrics = scenario.worstRun.metrics;
@@ -317,9 +424,10 @@ export function renderMarkdownReport(report: HarnessReport): string {
         ? "no baseline"
         : `${String(scenario.regressions.length)} regression(s)`;
     lines.push(
-      `| ${scenario.scenario} | ${scenario.verdict} | ${value(metrics.applicationTaskMs)} | ${value(metrics.p99)} | ${delta} |`,
+      `| ${scenario.scenario} | ${scenario.verdict} | ${value(metrics.applicationTaskMs)} | ${value(metrics.p99)} | ${floorMetricValue(scenario, "droppedOrPartiallyPresentedFrames")} | ${floorMetricValue(scenario, "longIntervals")} | ${value(metrics.tileMemoryBytes ?? "unavailable")} | ${value(tileMemoryMiB(metrics))} | ${String(metrics.missingTileFrameCount ?? 0)} | ${value(metrics.timeToSharpMs ?? "unavailable")} | ${delta} |`,
     );
   }
+  if (report.frameMeasurement) appendRunTable(lines, report.scenarios);
   if (report.environment)
     lines.push(
       "",
@@ -343,6 +451,47 @@ export function renderMarkdownReport(report: HarnessReport): string {
   return `${lines.join("\n")}\n`;
 }
 
+function appendRunTable(
+  lines: string[],
+  scenarios: readonly ScenarioEvaluation[],
+): void {
+  lines.push(
+    "",
+    "## Runs",
+    "",
+    "| Scenario | Run | Trace | Trace frames | Presented | Partially presented | Dropped | Window frames | Window presented | Window partially presented | Window dropped | Intervals > 12.5 ms |",
+    "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+  );
+  for (const scenario of scenarios) {
+    for (const run of scenario.runs) {
+      const trace = run.metrics.frames?.trace;
+      const window = run.metrics.frames?.window;
+      lines.push(
+        `| ${scenario.scenario} | ${String(run.run)} | ${run.tracePath} | ${frameValue(trace, "total")} | ${frameValue(trace, "presented")} | ${frameValue(trace, "partiallyPresented")} | ${frameValue(trace, "dropped")} | ${frameValue(window, "total")} | ${frameValue(window, "presented")} | ${frameValue(window, "partiallyPresented")} | ${frameValue(window, "dropped")} | ${String(run.metrics.longIntervals)} |`,
+      );
+    }
+  }
+}
+
+function frameValue(
+  frames: FrameCounts | undefined,
+  field: keyof FrameCounts,
+): string {
+  return frames ? String(frames[field]) : "unavailable";
+}
+
+function floorMetricValue(
+  scenario: ScenarioEvaluation,
+  metric: string,
+): string {
+  const floorMetric = scenario.floorRelativeMetrics.find(
+    (item) => item.metric === metric,
+  );
+  return floorMetric
+    ? `${String(floorMetric.runsOverAllowance)}/${String(floorMetric.runCount)}`
+    : "unavailable";
+}
+
 export function serializeReport(report: HarnessReport): string {
   const sanitized: HarnessReport = {
     ...report,
@@ -359,8 +508,17 @@ function serializeRun(run: ScenarioRun): ScenarioRun {
   return {
     run: run.run,
     tracePath: run.tracePath,
-    metrics: run.metrics,
+    metrics: {
+      ...run.metrics,
+      tileMemoryMiB: tileMemoryMiB(run.metrics),
+    },
   };
+}
+
+function tileMemoryMiB(metrics: ScenarioRunMetrics): ReportStatistic {
+  return typeof metrics.tileMemoryBytes === "number"
+    ? metrics.tileMemoryBytes / (1024 * 1024)
+    : "unavailable";
 }
 
 function value(valueToRender: ReportStatistic): string {

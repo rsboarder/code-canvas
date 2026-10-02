@@ -31,6 +31,7 @@
     "perf": "node --import tsx/esm perf/harness/cli.ts run",
     "perf:quick": "node --import tsx/esm perf/harness/cli.ts run --quick",
     "perf:stages": "node --import tsx/esm perf/harness/cli.ts stages",
+    "perf:classify": "node --import tsx/esm perf/harness/cli.ts classify",
     "perf:self-test": "node --import tsx/esm perf/harness/cli.ts self-test",
     "perf:baseline": "node --import tsx/esm perf/harness/cli.ts baseline:update",
     "test": "vitest run",

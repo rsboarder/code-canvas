@@ -7,10 +7,14 @@ import type {
 } from "../application/editor-host";
 
 export class FakeEditorHost implements EditorHost {
-  value = "";
+  private currentValue = "";
+  private openedValue = "";
+  private changedSinceOpen = false;
   visible = false;
   openCount = 0;
   closeCount = 0;
+  isOpen = false;
+  readOnly = false;
   lastOptions: EditorOpenOptions | undefined;
   lastBounds: Rect | undefined;
   lastZoom = 1;
@@ -20,19 +24,37 @@ export class FakeEditorHost implements EditorHost {
   private readonly listeners = new Set<() => void>();
   private readonly escapeListeners = new Set<() => void>();
 
+  get value(): string {
+    return this.currentValue;
+  }
+
+  set value(value: string) {
+    this.currentValue = value;
+    this.changedSinceOpen = value !== this.openedValue;
+  }
+
   open(options: EditorOpenOptions): void {
-    this.value = options.text;
+    this.currentValue = options.text;
+    this.openedValue = options.text;
+    this.changedSinceOpen = false;
     this.lastOptions = options;
     this.lastCursor = options.cursor;
     this.openCount += 1;
+    this.isOpen = true;
+    this.readOnly = false;
   }
 
   close(): void {
     this.closeCount += 1;
+    this.isOpen = false;
   }
 
   setVisible(visible: boolean): void {
     this.visible = visible;
+  }
+
+  setReadOnly(readOnly: boolean): void {
+    this.readOnly = readOnly;
   }
 
   setBounds(bounds: Rect, zoom: number): void {
@@ -49,7 +71,11 @@ export class FakeEditorHost implements EditorHost {
   }
 
   getValue(): string {
-    return this.value;
+    return this.currentValue;
+  }
+
+  hasContentChanged(): boolean {
+    return this.changedSinceOpen;
   }
 
   getLineCount(): number {

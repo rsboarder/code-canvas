@@ -37,22 +37,22 @@
 - [x] 4.1 Document the reference environment in `perf/ENVIRONMENT.md` (machine, Chrome version, display refresh rate, launch conditions, a clean Chrome profile with no extensions, Low Power Mode off, the noise-floor threshold, the date it was agreed on)
 - [x] 4.2 `FrameStats` in `src/performance` (a ring buffer of intervals, p50/p95/p99, per-frame-stage time), fed only by the FrameLoop's Frame Sample from `shared/frame` (design D8, D13), with one frame-statistics module (nearest-rank percentile, long-interval count, "unavailable" for an empty sample) shared by the overlay and the harness through the bridge, and the bridge type `src/performance/bridge.ts`; the `window.__perf` bridge and the File System Access mock only in the build with `VITE_PERF_HARNESS=1`; a test builds the regular bundle and checks for the absence of the bridge strings and mock adapters
 - [x] 4.3 A boundaries rule: `perf/` imports from `src/` only `src/performance/bridge.ts`; a violation fixture in the lint-config test
-- [ ] 4.4 The harness CLI (`pnpm perf`, `pnpm perf:quick`, `pnpm perf:stages`, `--scenario`, `pnpm perf:self-test`, `pnpm perf:baseline` with interactive TTY confirmation) with exit codes 0/1/2/3
-- [ ] 4.5 Preflight: headless, browser flags, idle rate ≥ 115 Hz, power on AC, measuring the noise floor and its threshold; environment parameters go into the report; tests for every failure condition
+- [x] 4.4 The harness CLI (`pnpm perf`, `pnpm perf:quick`, `pnpm perf:stages`, `--scenario`, `pnpm perf:self-test`, `pnpm perf:baseline` with interactive TTY confirmation) with exit codes 0/1/2/3
+- [x] 4.5 Preflight: headless, browser flags, idle rate ≥ 115 Hz, power on AC, measuring the noise floor and its threshold; environment parameters go into the report; tests for every failure condition
 - [x] 4.6 The gesture driver per spike A's verdict (CDP synthesize*Gesture or `dispatchMouseEvent`/`dispatchKeyEvent`; a third option — replaying a recorded real-trackpad event stream), continuous gestures at least as often as the frame rate, typing at the scenario's pace; a zod scenario schema; a test for determinism of the event sequence
 - [x] 4.7 Trace recording and frame classification (the DevTools engine or a homegrown parser, per spike A's verdict) — one classifier in `perf/harness/trace.ts` seeded from `spikes/c/trace-analysis.mjs` (`PipelineReporter` state, categories including `cc`, zero frames or tasks = invalid measurement; design D13); metrics: frame statuses, p50/p95/p99/max interval, the count of intervals > 12.5 ms, the longest application task and, separately, browser task (attribution per design D13), GC pauses, frame stages, `DocumentResidency` backlog depth, GPU time or "unavailable"
-- [ ] 4.8 Warm-up + repetitions, a verdict based on the worst run, `budgets.json` with thresholds relative to the noise floor, comparison against the baseline, a JSON + Markdown report, traces as `.json.gz` in `perf/results/`
-- [ ] 4.9 Stage-timing mode `perf:stages` for the agent: the same scenarios in any Chrome, only stages and application tasks, the report marked "not a frame measurement"
-- [ ] 4.10 Coverage check: every `#### Scenario:` of the "Frame budget" and "No background stalls" requirements in the `performance-budget` spec has a matching harness scenario; the run fails on a mismatch
+- [x] 4.8 Warm-up + repetitions, a verdict based on the worst run, `budgets.json` with thresholds relative to the noise floor, comparison against the baseline, a JSON + Markdown report, traces as `.json.gz` in `perf/results/`
+- [x] 4.9 Stage-timing mode `perf:stages` for the agent: the same scenarios in any Chrome, only stages and application tasks, the report marked "not a frame measurement"
+- [x] 4.10 Coverage check: every `#### Scenario:` of the "Frame budget" and "No background stalls" requirements in the `performance-budget` spec has a matching harness scenario; the run fails on a mismatch
 - [x] 4.11 Debug synthetic load via the bridge and `perf:self-test`: a 12 ms main-thread load → the failure is caught; a GPU load exceeding the frame period with a light main thread → the failure is caught; an empty scene → a clean run
 - [ ] 4.12 Cross-check: one trace opened in DevTools, the frame count matches the harness report; the result recorded in `perf/ENVIRONMENT.md`
-- [ ] 4.13 Process rules in README/AGENTS.md: a task touching rendering, input, the frame cycle, or background work is closed only with a green full `pnpm perf` run and a report path; the agent iterates with `perf:stages`; a full run at least twice a day; a weekly manual trackpad trace (pan, pinch, scroll) in `perf/acceptance/weekly/` compared against the harness; only a human updates the baseline
+- [x] 4.13 Process rules in README/AGENTS.md: a task touching rendering, input, the frame cycle, or background work is closed only with a green full `pnpm perf` run and a report path; the agent iterates with `perf:stages`; a full run at least twice a day; a weekly manual trackpad trace (pan, pinch, scroll) in `perf/acceptance/weekly/` compared against the harness; only a human updates the baseline
 
 ## 5. Shared kernel
 
-- [ ] 5.1 `shared/geometry`: Vec2, Rect, Mat3 (Board↔screen conversion, zoom to a point) with unit tests
-- [ ] 5.2 `shared/domain`: branded Ids, `DomainEvent`, `Result`
-- [ ] 5.3 `shared/events`: a typed synchronous event bus with unit tests (subscribe, unsubscribe, delivery order); only for low-frequency events between contexts — per-frame state is pulled (design D5)
+- [x] 5.1 `shared/geometry`: Vec2, Rect, Mat3 (Board↔screen conversion, zoom to a point) with unit tests
+- [x] 5.2 `shared/domain`: branded Ids, `DomainEvent`, `Result`
+- [x] 5.3 `shared/events`: a typed synchronous event bus with unit tests (subscribe, unsubscribe, delivery order); only for low-frequency events between contexts — per-frame state is pulled (design D5)
 
 ## 6. Workspace
 
@@ -78,7 +78,7 @@
 ## 9. Rendering
 
 - [ ] 9.1 GL layer: a single WebGL2 context, programs, buffers (twgl.js), context-loss handling; an e2e test compiles and links all shaders
-- [ ] 9.2 The code font from `shared/font.ts` in the raster workers, Text Metrics, and the raster-worker pool (design D6): 512 × 512 device-px tiles drawn one grapheme cluster at a time at LineLayout's x with palette colours, jobs and results as transferables (typed-array cells in, `ImageBitmap` out); a start-up check that the workers' font metrics equal Text Metrics; replaces the slice's glyph atlas (3.1)
+- [x] 9.2 The code font from `shared/font.ts` in the raster workers, Text Metrics, and the raster-worker pool (design D6): 512 × 512 device-px tiles drawn one grapheme cluster at a time at LineLayout's x with palette colours, jobs and results as transferables (typed-array cells in, `ImageBitmap` out); a start-up check that the workers' font metrics equal Text Metrics; replaces the slice's glyph atlas (3.1)
 - [ ] 9.3 WidgetTable (a data texture: Widget Frame, Content Scroll, a unique depth per Stack Order) updated by draining Board's dirty widget ids once per frame; Detail Level as a single uniform
 - [ ] 9.4 `GpuUploader` WebGL adapter: line windows (cells + colour indexes) → content-anchored tile planning per visible widget at the raster scale with a one-tile margin ring; the tile pool (fixed slots allocated outside the frame, LRU, visible and fallback tiles pinned) filled with `texSubImage2D` from `ImageBitmap`s inside the drain budget; "tiles current for (file, Content Version)" for the exit swap; minimap bytes into the minimap atlas; partial texture updates only
 - [ ] 9.5 Background pass: backgrounds, frames, titles, the scroll indicator, depth writing
@@ -89,7 +89,7 @@
 
 ## 10. Interaction
 
-- [ ] 10.1 `GestureTargeting` (design D8): raw wheel/pointer/key events in, per-frame intents out; target chosen at gesture start from Board hit-test, Detail Level and the active Editing Session, held through the momentum phase; pinch (`ctrlKey`) → zoom to the cursor with `preventDefault`, by `exp(−deltaY / 100)` per event with |deltaY| clamped to 10 (design D8); scroll inside a widget at Text sticks at the content edge; pan at Minimap; wheel over the editor goes to Monaco; pan/zoom while editing ends the session with a pending gesture; drag/resize of the active widget refused
+- [ ] 10.1 `GestureTargeting` (design D8): raw wheel/pointer/key events in, per-frame intents out; target chosen at gesture start from Board hit-test, Detail Level and the active Editing Session, held through the momentum phase; pinch (`ctrlKey`) → zoom to the cursor with `preventDefault`, by `exp(−deltaY / K)` per event, with K and the per-event step clamp from `shared/pinch.ts` (design D8); scroll inside a widget at Text sticks at the content edge; pan at Minimap; wheel over the editor goes to Monaco; pan/zoom while editing ends the session with a pending gesture; drag/resize of the active widget refused
 - [ ] 10.2 Pointer intents: pan by dragging empty space and with the spacebar, drag by the title bar, resize from the right/bottom edge and corner with an on-screen grab zone, bringToFront on click
 - [ ] 10.3 Keyboard shortcuts Shift+1, Shift+0, the metrics overlay; unit tests of every routing scenario over recorded event sequences, with no browser
 - [ ] 10.4 e2e per the `canvas-viewport`, `widget-manipulation` scenarios and the scroll scenario from `code-widget-rendering`
@@ -98,7 +98,7 @@
 ## 11. Editing
 
 - [ ] 11.1 Domain: EditingSession (at most one, a stationary camera and Widget Frame), Draft, AutosavePolicy; unit tests
-- [ ] 11.2 `EditingTransition` (design D9): `begin(widgetId, clickPoint)` (re-read the file, conflict, Camera snap), `end(reason, pendingGesture?)` (Escape, click outside, pan, zoom, another widget; `applyDraft`, `DocumentResidency.prioritize`), `takeFrameSwap()` applied atomically by the FrameLoop once the widget's tiles are current (design D2); a 1 s autosave, write errors with retry; port `EditorHost` with two adapters (Monaco, fake); unit tests of every exit reason with the fake and no WebGL
+- [ ] 11.2 `EditingTransition` (design D9): `begin(widgetId, clickPoint)` (re-read the file, conflict; no Camera snap — design D9 "Metric alignment"), `end(reason, pendingGesture?)` (Escape, click outside, pan, zoom, another widget; `applyDraft` only when the Monaco model's version changed since `begin` — design D9, spec "Opening without a change"; `DocumentResidency.prioritize`), `takeFrameSwap()` applied atomically by the FrameLoop once the widget's tiles are current (design D2); a 1 s autosave that also publishes the Draft as a Content Version, so the widget's tiles are rasterized under Monaco and an exit after a pause in typing swaps in its first tick (design D2), write errors with retry; port `EditorHost` with two adapters (Monaco, fake); unit tests of every exit reason with the fake and no WebGL
 - [ ] 11.3 Infrastructure: a single Monaco instance in a minimal configuration (design D9), `setModel`, the theme from 8.2, the container is placed on entry, the GPU↔Monaco swap happens within a single frame, new text right after exit with highlighting ≤ 100 ms
 - [ ] 11.4 An e2e check that drag and resize of the active widget are refused during editing (the rule itself lives in `GestureTargeting`, 10.1)
 - [ ] 11.5 Double-clicking a Minimap zooms in on the widget to 1.0 without entering editing

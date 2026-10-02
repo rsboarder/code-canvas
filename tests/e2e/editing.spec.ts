@@ -11,6 +11,10 @@ import {
   type LineMetrics,
 } from "../../src/code-view/domain/line-layout";
 import { DEFAULT_CODE_FONT } from "../../src/shared/font";
+import {
+  MAX_ZOOM_STEP_LN,
+  PINCH_WHEEL_DELTA_PER_LN_SCALE,
+} from "../../src/shared/pinch";
 
 test.describe.configure({ mode: "serial" });
 test.use({ deviceScaleFactor: 2 });
@@ -71,6 +75,162 @@ async function bodyPoint(page: Page): Promise<{ x: number; y: number }> {
     height: number;
   };
   return { x: rect.x + Math.min(120, rect.width / 2), y: rect.y + 24 };
+}
+
+interface FrameLogEntry {
+  readonly tick: number;
+  readonly timeMs: number;
+  readonly drawnTileCount: number;
+  readonly drawnLabelTileCount: number;
+  readonly drawnUnhighlightedTileCount: number;
+  readonly lowestContentVersion: number;
+  readonly editorVisible: boolean;
+  readonly cameraOffsetX: number;
+  readonly cameraOffsetY: number;
+  readonly cameraScale: number;
+}
+
+async function readFrameLog(page: Page): Promise<readonly FrameLogEntry[]> {
+  return page.evaluate(() => {
+    const entries = window.__codeCanvasTest?.frameLog();
+    if (!entries) throw new Error("Code Canvas frame log is missing");
+    return entries;
+  });
+}
+
+async function lastFrameTick(page: Page): Promise<number> {
+  const entries = await readFrameLog(page);
+  return entries[entries.length - 1]?.tick ?? -1;
+}
+
+async function waitForFrame(
+  page: Page,
+  predicate: (entry: FrameLogEntry) => boolean,
+): Promise<FrameLogEntry> {
+  let match: FrameLogEntry | undefined;
+  await expect
+    .poll(
+      async () => {
+        match = (await readFrameLog(page)).find(predicate);
+        return match?.tick ?? -1;
+      },
+      { timeout: 3000 },
+    )
+    .not.toBe(-1);
+  if (!match) throw new Error("Expected frame-log entry is missing");
+  return match;
+}
+
+async function installEscapeKeydownClock(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLElement>(
+      '[data-testid="canvas"]',
+    );
+    if (!canvas) throw new Error("Canvas is missing");
+    canvas.removeAttribute("data-escape-keydown-ms");
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key === "Escape") {
+          canvas.setAttribute(
+            "data-escape-keydown-ms",
+            String(performance.now()),
+          );
+        }
+      },
+      { capture: true, once: true },
+    );
+  });
+}
+
+async function assertHeldExitFrames(
+  page: Page,
+  startTick: number,
+  contentVersion: number,
+): Promise<void> {
+  const entries = (await readFrameLog(page)).filter(
+    (entry) => entry.tick >= startTick,
+  );
+  expect(entries.length).toBeGreaterThan(0);
+  for (const entry of entries) {
+    expect(
+      entry.lowestContentVersion === -1 ||
+        entry.lowestContentVersion >= contentVersion,
+    ).toBe(true);
+    expect(entry.editorVisible || entry.drawnTileCount > 0).toBe(true);
+    expect(entry.drawnLabelTileCount).toBeGreaterThan(0);
+  }
+  const editingEntries = entries.filter((entry) => entry.editorVisible);
+  const stationary = editingEntries[0];
+  if (!stationary) throw new Error("No held editing frame was logged");
+  for (const entry of editingEntries) {
+    expect(entry.cameraOffsetX).toBe(stationary.cameraOffsetX);
+    expect(entry.cameraOffsetY).toBe(stationary.cameraOffsetY);
+    expect(entry.cameraScale).toBe(stationary.cameraScale);
+  }
+}
+
+async function assertHighlightingAfterEdit(
+  page: Page,
+  text: string,
+  label: string,
+): Promise<void> {
+  await openFile(page, text);
+  const canvas = page.getByTestId("canvas");
+  await canvas.dblclick({ position: await bodyPoint(page) });
+  await expect(canvas).toHaveAttribute("data-editing", "true");
+  await page.keyboard.type("x");
+  await installEscapeKeydownClock(page);
+  const startTick = await lastFrameTick(page);
+  await page.keyboard.press("Escape");
+  await expect(canvas).toHaveAttribute("data-editing", "false");
+  await expect(canvas).toHaveAttribute("data-content-version", "2");
+  const exit = await waitForFrame(
+    page,
+    (entry) => entry.tick > startTick && !entry.editorVisible,
+  );
+  const highlighted = await waitForFrame(
+    page,
+    (entry) =>
+      entry.tick >= exit.tick &&
+      !entry.editorVisible &&
+      entry.drawnTileCount > 0 &&
+      entry.lowestContentVersion >= 2 &&
+      entry.drawnUnhighlightedTileCount === 0,
+  );
+  const keydownAt = Number(await canvas.getAttribute("data-escape-keydown-ms"));
+  if (!Number.isFinite(keydownAt))
+    throw new Error("Escape keydown timestamp is missing");
+  console.info(
+    `Highlighting after an edit ${label}: escape-to-exit=${String(exit.timeMs - keydownAt)}ms, exit-to-highlight=${String(highlighted.timeMs - exit.timeMs)}ms`,
+  );
+  expect(highlighted.timeMs - exit.timeMs).toBeLessThanOrEqual(100);
+  await assertHeldExitFrames(page, startTick, 2);
+}
+
+async function pinchWithCdp(page: Page, target: number): Promise<void> {
+  const current = await cameraScale(page);
+  let remainingLn = Math.log(target / current);
+  const point = await page.evaluate(() => ({
+    x: window.innerWidth - 24,
+    y: window.innerHeight - 24,
+  }));
+  const client = await page.context().newCDPSession(page);
+  while (Math.abs(remainingLn) > 1e-9) {
+    const step =
+      Math.sign(remainingLn) *
+      Math.min(Math.abs(remainingLn), MAX_ZOOM_STEP_LN);
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x: point.x,
+      y: point.y,
+      deltaX: 0,
+      deltaY: -step * PINCH_WHEEL_DELTA_PER_LN_SCALE,
+      modifiers: 2,
+    });
+    remainingLn -= step;
+  }
+  await client.detach();
 }
 
 test("Double click on a line", async ({ page }) => {
@@ -401,12 +561,22 @@ async function cameraScale(page: Page): Promise<number> {
 }
 
 async function zoomCanvasTo(page: Page, target: number): Promise<void> {
+  // One event's zoom step is clamped to exp(±MAX_ZOOM_STEP_LN) (design D8
+  // "Pinch follows the fingers"), so reaching a distant target takes several
+  // ctrl+wheel events, each covering at most MAX_ZOOM_STEP_LN of ln(scale).
   const current = await cameraScale(page);
-  const deltaY = -Math.log(target / current) / 0.002;
-  await page.getByTestId("canvas").dispatchEvent("wheel", {
-    deltaY,
-    ctrlKey: true,
-  });
+  let remainingLn = Math.log(target / current);
+  const canvas = page.getByTestId("canvas");
+  while (Math.abs(remainingLn) > 1e-9) {
+    const step =
+      Math.sign(remainingLn) *
+      Math.min(Math.abs(remainingLn), MAX_ZOOM_STEP_LN);
+    await canvas.dispatchEvent("wheel", {
+      deltaY: -step * PINCH_WHEEL_DELTA_PER_LN_SCALE,
+      ctrlKey: true,
+    });
+    remainingLn -= step;
+  }
   await expect.poll(() => cameraScale(page)).toBeCloseTo(target, 2);
 }
 
@@ -458,7 +628,7 @@ test("Escape", async ({ page }) => {
     "true",
   );
   await page.keyboard.type(" ");
-  const exitedAt = await page.evaluate(() => performance.now());
+  const startTick = await lastFrameTick(page);
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("canvas")).toHaveAttribute(
     "data-editing",
@@ -468,16 +638,17 @@ test("Escape", async ({ page }) => {
     "data-content-version",
     "2",
   );
-  await expect
-    .poll(
-      async () => page.getByTestId("canvas").getAttribute("data-highlighted"),
-      {
-        timeout: 100,
-      },
-    )
-    .toBe("true");
-  const highlightedAt = await page.evaluate(() => performance.now());
-  expect(highlightedAt - exitedAt).toBeLessThanOrEqual(100);
+  await assertHeldExitFrames(page, startTick, 2);
+});
+
+test("Opening without a change", async ({ page }) => {
+  await openFile(page, "const answer = 42;\rconst other = 7;\r");
+  const canvas = page.getByTestId("canvas");
+  await canvas.dblclick({ position: await bodyPoint(page) });
+  await expect(canvas).toHaveAttribute("data-editing", "true");
+  await page.keyboard.press("Escape");
+  await expect(canvas).toHaveAttribute("data-editing", "false");
+  await expect(canvas).toHaveAttribute("data-content-version", "1");
 });
 
 test("Pan during editing", async ({ page }) => {
@@ -488,6 +659,8 @@ test("Pan during editing", async ({ page }) => {
     "data-editing",
     "true",
   );
+  await page.keyboard.type("x");
+  const startTick = await lastFrameTick(page);
   const before = await page
     .getByTestId("canvas")
     .getAttribute("data-widget-body-rect");
@@ -505,26 +678,77 @@ test("Pan during editing", async ({ page }) => {
       page.getByTestId("canvas").getAttribute("data-widget-body-rect"),
     )
     .not.toBe(before);
+  await assertHeldExitFrames(page, startTick, 2);
 });
 
-test("Highlighting after an edit", async ({ page }) => {
-  await openFile(page, "const answer = 42;\n");
-  await page
-    .getByTestId("canvas")
-    .dblclick({ position: await bodyPoint(page) });
+test.describe("Highlighting after an edit", () => {
+  test("one-line file", async ({ page }) => {
+    await assertHighlightingAfterEdit(
+      page,
+      "const answer = 42;\n",
+      "one-line file",
+    );
+  });
+
+  // The whole-file slice tokenizer re-tokenizes the whole file on every
+  // Content Version.
+  // It measured 348 ms from exit to highlighted for this case; task 8.3's
+  // incremental tokenizer is expected to meet the bound. Remove test.fail()
+  // when this test passes.
+  test("2000-line file", async ({ page }) => {
+    test.fail();
+    const text = await readFile(
+      "fixtures/reference-dataset/group-00/widget-000.tsx",
+      "utf8",
+    );
+    await assertHighlightingAfterEdit(page, text, "2000-line file");
+  });
+});
+
+test("Zoom during editing", async ({ page }) => {
+  const text = "const answer = 42;\n";
+  const targetScale = 1.37;
+  await openFile(page, text);
+  await pinchWithCdp(page, targetScale);
+  await page.waitForTimeout(200);
+  const referenceScale = await cameraScale(page);
+
+  await openFile(page, text);
+  const canvas = page.getByTestId("canvas");
+  await canvas.dblclick({ position: await bodyPoint(page) });
+  await expect(canvas).toHaveAttribute("data-editing", "true");
   await page.keyboard.type("x");
+  const startTick = await lastFrameTick(page);
+  await pinchWithCdp(page, targetScale);
+  await expect(canvas).toHaveAttribute("data-editing", "false");
+  await expect(canvas).toHaveAttribute("data-content-version", "2");
+  await page.waitForTimeout(200);
+  expect(
+    Math.abs((await cameraScale(page)) - referenceScale),
+  ).toBeLessThanOrEqual(0.005);
+  await assertHeldExitFrames(page, startTick, 2);
+});
+
+test("Escape without edits hides the editor in the first tick", async ({
+  page,
+}) => {
+  await openFile(page, "const answer = 42;\n");
+  const canvas = page.getByTestId("canvas");
+  await canvas.dblclick({ position: await bodyPoint(page) });
+  await expect(canvas).toHaveAttribute("data-editing", "true");
+  const beforeEscape = await lastFrameTick(page);
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("canvas")).toHaveAttribute(
-    "data-editing",
-    "false",
+  await expect(canvas).toHaveAttribute("data-editing", "false");
+  await expect
+    .poll(async () => {
+      const entries = await readFrameLog(page);
+      return entries.filter((entry) => entry.tick > beforeEscape).length;
+    })
+    .toBeGreaterThan(0);
+  const firstAfterEscape = (await readFrameLog(page)).find(
+    (entry) => entry.tick > beforeEscape,
   );
-  await expect(page.getByTestId("canvas")).toHaveAttribute(
-    "data-highlighted",
-    "true",
-    {
-      timeout: 100,
-    },
-  );
+  expect(firstAfterEscape?.editorVisible).toBe(false);
 });
 
 test("Edge-case Corpus line-count parity", async ({ page }) => {

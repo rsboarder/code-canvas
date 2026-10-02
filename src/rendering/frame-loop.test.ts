@@ -94,3 +94,80 @@ describe("FrameLoop", () => {
     expect(samples).toHaveLength(2);
   });
 });
+
+describe("FrameLoop metrics", () => {
+  it("keeps the frame sample shape and resets tile metrics on every tick", () => {
+    const callbacks = stubAnimationFrame();
+    vi.spyOn(performance, "now").mockReturnValue(1);
+    const ownKeys: string[][] = [];
+    let tick = 0;
+    const loop = new FrameLoop(
+      [
+        {
+          name: "draw",
+          run: () => {
+            tick += 1;
+            if (tick === 1)
+              loop.setFrameMetrics({
+                tileMemoryBytes: 1024,
+                missingTile: true,
+                timeToSharpMs: 12,
+              });
+          },
+        },
+      ],
+      (sample) => {
+        ownKeys.push(Object.keys(sample).sort());
+        if (tick === 1) expect(sample.tileMemoryBytes).toBe(1024);
+        else expect(Number.isNaN(sample.tileMemoryBytes)).toBe(true);
+        expect(sample.missingTile).toBe(tick === 1);
+        if (tick === 1) expect(sample.timeToSharpMs).toBe(12);
+        else expect(Number.isNaN(sample.timeToSharpMs)).toBe(true);
+      },
+    );
+
+    loop.invalidate();
+    callbacks.shift()?.(0);
+    loop.invalidate();
+    callbacks.shift()?.(0);
+
+    expect(ownKeys[0]).toEqual(ownKeys[1]);
+  });
+});
+
+describe("FrameLoop liveness", () => {
+  it("runs the following tick when drain uploads a tile", () => {
+    const callbacks = stubAnimationFrame();
+    vi.spyOn(performance, "now").mockReturnValue(1);
+    let uploaded = true;
+    const drain = vi.fn(() => {
+      if (uploaded) {
+        uploaded = false;
+        loop.invalidate();
+      }
+    });
+    const loop = new FrameLoop([{ name: "residency-drain", run: drain }]);
+
+    loop.invalidate();
+    callbacks.shift()?.(0);
+    expect(drain).toHaveBeenCalledTimes(1);
+    expect(callbacks).toHaveLength(1);
+
+    callbacks.shift()?.(0);
+    expect(drain).toHaveBeenCalledTimes(2);
+    expect(callbacks).toHaveLength(0);
+  });
+
+  it("does not schedule a tick at rest without an upload", () => {
+    const callbacks = stubAnimationFrame();
+    vi.spyOn(performance, "now").mockReturnValue(1);
+    const drain = vi.fn();
+    const loop = new FrameLoop([{ name: "residency-drain", run: drain }]);
+
+    loop.invalidate();
+    callbacks.shift()?.(0);
+
+    expect(drain).toHaveBeenCalledTimes(1);
+    expect(callbacks).toHaveLength(0);
+  });
+});

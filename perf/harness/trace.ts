@@ -41,21 +41,43 @@ export interface TraceEvent {
 
 export type TraceEvents = readonly TraceEvent[];
 
+// Chrome has no gesture-end trace event, so the interaction window stays open
+// this long past the last input dispatch to also cover the frames that
+// present it (D8: the FrameLoop runs while a gesture is in progress).
+const INTERACTION_TAIL_MS = 100;
+
+// Renderer-side dispatch of the DOM events the harness driver can send
+// (perf/harness/driver.ts): wheel for pan/scroll/ctrl-pinch, the mouse events
+// for a pointer drag, and keydown for typing. Chrome emits these as
+// "EventDispatch" under the always-on "devtools.timeline" category (verified
+// 2026-10-02 against this worktree's acceptance traces), so no extra trace
+// category is needed.
+const INPUT_DISPATCH_EVENT_TYPES = new Set([
+  "wheel",
+  "mousedown",
+  "mousemove",
+  "mouseup",
+  "keydown",
+]);
+
 export interface TraceClassifierOptions {
   readonly applicationMarkers?: readonly string[];
   readonly bridgeMetrics?: BridgeMetrics;
 }
 
+export interface FrameCounts {
+  readonly total: number;
+  readonly presented: number;
+  readonly partiallyPresented: number;
+  readonly dropped: number;
+  readonly idle: number;
+}
+
 export interface TraceMetrics {
   readonly valid: true;
   readonly frameSource: "PipelineReporter";
-  readonly frames: {
-    readonly total: number;
-    readonly presented: number;
-    readonly partiallyPresented: number;
-    readonly dropped: number;
-    readonly idle: number;
-  };
+  readonly frames: FrameCounts;
+  readonly traceFrames: FrameCounts;
   readonly intervalsMs: IntervalStatistics;
   readonly intervalsOver12_5Ms: Statistic;
   readonly mainThreadTasks: number;
@@ -88,7 +110,11 @@ export interface InvalidMeasurement {
     | "trace-parse-failed"
     | "zero-main-thread-tasks"
     | "zero-pipeline-frames"
-    | "app-bridge-missing";
+    | "app-bridge-missing"
+    | "gesture-dispatch-failed"
+    | "gesture-wall-time-exceeded"
+    | "camera-mismatch"
+    | "camera-range-mismatch";
   readonly detail?: string;
 }
 
@@ -166,12 +192,14 @@ export async function classifyTrace(
   const frames = pipelineFrames(events);
   if (frames.length === 0) return invalid("zero-pipeline-frames");
 
-  const intervals = presentedIntervalsMs(frames);
+  const framesInWindow = framesWithinInteractionWindow(events, frames);
+  const intervals = presentedIntervalsMs(framesInWindow);
   const bridge = options.bridgeMetrics ?? unavailableBridgeMetrics();
   return {
     valid: true,
     frameSource: "PipelineReporter",
-    frames: frameCounts(frames),
+    frames: frameCounts(framesInWindow),
+    traceFrames: frameCounts(frames),
     intervalsMs: intervalStatistics(intervals),
     intervalsOver12_5Ms: countLongIntervals(intervals, 12.5),
     mainThreadTasks: taskMetrics.tasks.length,
@@ -213,6 +241,48 @@ function pipelineFrames(events: TraceEvents): TraceEvent[] {
     })
     .filter(isTraceEvent)
     .sort(compareTraceEvents);
+}
+
+interface InteractionWindow {
+  readonly startTs: number;
+  readonly endTs: number;
+}
+
+function framesWithinInteractionWindow(
+  events: TraceEvents,
+  frames: readonly TraceEvent[],
+): readonly TraceEvent[] {
+  const window = interactionWindow(events);
+  if (!window) return frames;
+  return frames.filter(
+    (frame) => frame.ts >= window.startTs && frame.ts <= window.endTs,
+  );
+}
+
+function interactionWindow(events: TraceEvents): InteractionWindow | undefined {
+  const timestamps = events
+    .filter(isInputDispatchEvent)
+    .map((event) => event.ts);
+  if (timestamps.length === 0) return undefined;
+  return {
+    startTs: Math.min(...timestamps),
+    endTs: Math.max(...timestamps) + INTERACTION_TAIL_MS * 1_000,
+  };
+}
+
+function isInputDispatchEvent(event: TraceEvent): boolean {
+  if (
+    event.name !== "EventDispatch" ||
+    !hasCategory(event.cat, "devtools.timeline")
+  ) {
+    return false;
+  }
+  const data = isRecord(event.args) ? event.args.data : undefined;
+  return (
+    isRecord(data) &&
+    typeof data.type === "string" &&
+    INPUT_DISPATCH_EVENT_TYPES.has(data.type)
+  );
 }
 
 function frameCounts(frames: readonly TraceEvent[]): TraceMetrics["frames"] {

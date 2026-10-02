@@ -34,6 +34,7 @@ interface EditingTransitionOptions {
   readonly editor: EditorHost;
   readonly residency: DocumentResidency;
   readonly readSource: (widgetId: string) => EditingSource | undefined;
+  readonly tilesCurrent: (widgetId: string, contentVersion: number) => boolean;
   readonly onContentChanged?: (source: EditingSource) => void;
 }
 
@@ -52,13 +53,17 @@ export class EditingTransition {
     return this.session !== undefined;
   }
 
+  get isExitHeld(): boolean {
+    return this.pendingSwap?.direction === "exit";
+  }
+
   begin(
     widgetId: string,
     _clickPoint: { x: number; y: number },
     cursor: EditorCursor,
   ): boolean {
     const source = this.options.readSource(widgetId);
-    if (!source || this.session) return false;
+    if (!source || this.session || this.pendingSwap) return false;
     this.source = source;
     this.session = createEditingSession(
       source.widgetId,
@@ -70,6 +75,7 @@ export class EditingTransition {
       language: source.path.endsWith(".tsx") ? "typescriptreact" : "typescript",
       cursor,
     });
+    this.options.editor.setReadOnly(false);
     this.options.editor.setVisible(false);
     this.pendingSwap = { direction: "enter", widgetId };
     return true;
@@ -78,8 +84,10 @@ export class EditingTransition {
   end(_reason: EditingEndReason, pendingGesture?: PendingGesture): boolean {
     if (!this.session || !this.source) return false;
     const source = this.source;
-    const draft = this.options.editor.getValue();
-    if (draft !== source.text) {
+    this.options.editor.setReadOnly(true);
+    this.options.residency.prioritize(source.widgetId);
+    if (this.options.editor.hasContentChanged()) {
+      const draft = this.options.editor.getValue();
       const updated = {
         ...source,
         contentVersion: source.contentVersion + 1,
@@ -111,6 +119,12 @@ export class EditingTransition {
   takeFrameSwap(): FrameSwap | undefined {
     const swap = this.pendingSwap;
     if (!swap) return undefined;
+    if (
+      swap.direction === "exit" &&
+      swap.source &&
+      !this.options.tilesCurrent(swap.widgetId, swap.source.contentVersion)
+    )
+      return undefined;
     this.pendingSwap = undefined;
     this.options.editor.setVisible(swap.direction === "enter");
     if (swap.direction === "exit") this.options.editor.close();

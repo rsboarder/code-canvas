@@ -11,7 +11,7 @@ import {
   measureNoiseFloor,
   type NoiseFloor,
 } from "./preflight";
-import { openHarnessPage } from "./harness-page";
+import { HEADED_WINDOW_ARGS, openHarnessPage } from "./harness-page";
 import { recordTrace, type TraceMetrics } from "./trace";
 import {
   evaluateSelfTest,
@@ -71,7 +71,11 @@ export async function runLiveSelfTest(
       env: process.env,
       stdio: "ignore",
     });
-    browser = await chromium.launch({ channel: "chrome", headless: false });
+    browser = await chromium.launch({
+      channel: "chrome",
+      headless: false,
+      args: HEADED_WINDOW_ARGS,
+    });
     return await measureLiveSelfTest(browser, budgets, runner);
   } catch (error: unknown) {
     return invalidSelfTestResult(
@@ -91,7 +95,7 @@ async function measureLiveSelfTest(
   budgets: BudgetConfig,
   runner: SelfTestRunner,
 ): Promise<HarnessResult> {
-  const page = await openHarnessPage(browser);
+  const page = await openHarnessPage(browser, true);
   await gotoPreview(page, PREVIEW_PORT);
   if (!(await runner.waitForApplicationBridge(page)))
     return invalidSelfTestResult("application bridge is unavailable");
