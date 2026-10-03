@@ -11,6 +11,7 @@ describe("FrameLog", () => {
           missingTile: index % 2 === 0,
           drawnTileCount: index,
           drawnLabelTileCount: index % 3,
+          drawnMinimapCount: index % 5,
           drawnFallbackTileCount: 0,
           drawnUnhighlightedTileCount: index % 4,
           lowestEpochDrawn: index,
@@ -44,6 +45,7 @@ describe("FrameLog", () => {
         missingTile: true,
         drawnTileCount: 2,
         drawnLabelTileCount: 1,
+        drawnMinimapCount: 3,
         drawnFallbackTileCount: 1,
         drawnUnhighlightedTileCount: 2,
         lowestEpochDrawn: 7,
@@ -69,5 +71,34 @@ describe("FrameLog", () => {
     expect(log.snapshot()[0]?.tick).toBe(0);
     expect(log.snapshot()[0]?.onScreenLineHeight).toBe(11.1);
     expect(log.snapshot()[0]?.textReady).toBe(true);
+  });
+});
+
+describe("FrameLog minimap metrics", () => {
+  it("records the minimap draw count", () => {
+    const log = new FrameLog();
+    log.record(
+      {
+        missingTile: false,
+        drawnTileCount: 0,
+        drawnLabelTileCount: 0,
+        drawnMinimapCount: 7,
+        drawnFallbackTileCount: 0,
+        drawnUnhighlightedTileCount: 0,
+        lowestEpochDrawn: -1,
+        lowestContentVersion: -1,
+      },
+      {
+        cameraOffsetX: 0,
+        cameraOffsetY: 0,
+        cameraScale: 0.2,
+        detailLevel: 1,
+        onScreenLineHeight: 3.2,
+        textReady: false,
+        editorVisible: false,
+      },
+    );
+
+    expect(log.snapshot()[0]?.drawnMinimapCount).toBe(7);
   });
 });

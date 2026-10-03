@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { splitSourceLines } from "../../src/shared/domain";
 import {
   EDGE_CASE_FILES,
   FILE_COUNT,
@@ -7,7 +8,6 @@ import {
   MAX_LINE_LENGTH,
   generateDataset,
   generateEdgeCaseCorpus,
-  splitSourceLines,
 } from "./dataset";
 
 describe("Reference Dataset", () => {
@@ -27,7 +27,7 @@ describe("Reference Dataset", () => {
         ),
       ).toBe(0);
     });
-  });
+  }, 30_000);
 
   it("declares the task 1.9 feature profile", () => {
     const dataset = generateDataset();

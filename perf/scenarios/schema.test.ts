@@ -39,4 +39,47 @@ describe("scenarioSchema", () => {
       }),
     ).toThrow();
   });
+
+  it("accepts only true for initial-load setup", () => {
+    expect(
+      scenarioSchema.parse({
+        ...scenario,
+        setup: { ...scenario.setup, initialLoad: true },
+      }),
+    ).toEqual({
+      ...scenario,
+      setup: { ...scenario.setup, initialLoad: true },
+    });
+    expect(() =>
+      scenarioSchema.parse({
+        ...scenario,
+        setup: { ...scenario.setup, initialLoad: false },
+      }),
+    ).toThrow();
+    expect(() =>
+      scenarioSchema.parse({
+        ...scenario,
+        setup: { ...scenario.setup, initialLoad: "true" },
+      }),
+    ).toThrow();
+  });
+
+  it("accepts insertion and shortcut steps with an edit path", () => {
+    const typingScenario = {
+      ...scenario,
+      setup: { ...scenario.setup, editPath: "group-00/widget-000.tsx" },
+      steps: [
+        { kind: "paste", text: "pasted text" },
+        { kind: "key", key: "z", code: "KeyZ", keyCode: 90, modifiers: 4 },
+      ],
+    };
+
+    expect(scenarioSchema.parse(typingScenario)).toEqual(typingScenario);
+    expect(() =>
+      scenarioSchema.parse({
+        ...typingScenario,
+        steps: [{ kind: "key", key: "z", code: "KeyZ" }],
+      }),
+    ).toThrow();
+  });
 });

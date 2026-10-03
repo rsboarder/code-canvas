@@ -5,6 +5,7 @@ interface SyntheticLoad {
 
 interface SyntheticLoadStage {
   readonly name: "synthetic-load";
+  isActive(): boolean;
   setLoad(load: SyntheticLoad): void;
   run(): void;
 }
@@ -16,6 +17,7 @@ export function createSyntheticLoadStage(
   let load: SyntheticLoad = { cpuMs: 0, gpuIterations: 0 };
   return {
     name: "synthetic-load",
+    isActive: () => isActive(load),
     setLoad: (nextLoad) => {
       load = {
         cpuMs: Math.max(0, nextLoad.cpuMs),

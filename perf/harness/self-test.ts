@@ -5,6 +5,7 @@ import { chromium, type CDPSession, type Page } from "@playwright/test";
 import type { PerfFile } from "../../src/performance/bridge";
 import panScenario from "../scenarios/pan-whole-canvas";
 import {
+  classifyNoiseFloor,
   collectEnvironment,
   evaluateNoiseFloor,
   evaluatePreflight,
@@ -12,7 +13,7 @@ import {
   type NoiseFloor,
 } from "./preflight";
 import { HEADED_WINDOW_ARGS, openHarnessPage } from "./harness-page";
-import { recordTrace, type TraceMetrics } from "./trace";
+import { recordTrace } from "./trace";
 import {
   evaluateSelfTest,
   type SelfTestCaseName,
@@ -112,13 +113,19 @@ async function measureLiveSelfTest(
       `preflight failed: ${preflight.reasons.join("; ")}`,
       environment,
     );
-  const noiseFloor = await measureNoiseFloor({
+  const measuredNoiseFloor = await measureNoiseFloor({
     page,
     cdp,
     durationMs: 60_000,
     recordTrace,
     classifyTrace: classifyNoiseFloor,
   });
+  if ("valid" in measuredNoiseFloor)
+    return invalidSelfTestResult(
+      `noise floor measurement invalid: ${measuredNoiseFloor.reason}${measuredNoiseFloor.detail ? `: ${measuredNoiseFloor.detail}` : ""}`,
+      environment,
+    );
+  const noiseFloor = measuredNoiseFloor;
   if (!evaluateNoiseFloor(noiseFloor).valid)
     return invalidSelfTestResult(
       "noise floor exceeds the reference threshold",
@@ -299,37 +306,6 @@ async function setSyntheticLoad(
     window.__perf?.setSyntheticLoad(value);
   }, load);
   return true;
-}
-
-function classifyNoiseFloor(value: unknown): NoiseFloor {
-  if (!isTraceMetrics(value))
-    return {
-      droppedFramesPerMinute: 0,
-      partiallyPresentedFramesPerMinute: 0,
-      intervalsOver12_5MsPerMinute: 0,
-    };
-  const intervals =
-    typeof value.intervalsOver12_5Ms === "number"
-      ? value.intervalsOver12_5Ms
-      : 0;
-  return {
-    droppedFramesPerMinute: value.frames.dropped,
-    partiallyPresentedFramesPerMinute: value.frames.partiallyPresented,
-    intervalsOver12_5MsPerMinute: intervals,
-  };
-}
-
-function isTraceMetrics(value: unknown): value is TraceMetrics {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "valid" in value &&
-    value.valid === true &&
-    "frames" in value &&
-    typeof value.frames === "object" &&
-    value.frames !== null &&
-    "intervalsOver12_5Ms" in value
-  );
 }
 
 function renderSelfTestTable(evaluation: {

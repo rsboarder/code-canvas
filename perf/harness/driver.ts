@@ -80,11 +80,7 @@ export async function runEvents(
       await clock.sleep(readWaitMilliseconds(event));
       continue;
     }
-    acks.push(
-      cdp.send(event.method as Parameters<CDPSession["send"]>[0], {
-        ...event.params,
-      }),
-    );
+    acks.push(sendEvent(cdp, event));
   }
   await awaitAcksWithCap(
     acks,
@@ -137,6 +133,14 @@ function appendStepEvents(
     appendTypingEvents(events, step, startMs);
     return;
   }
+  if (step.kind === "paste") {
+    appendPasteEvent(events, step, startMs);
+    return;
+  }
+  if (step.kind === "key") {
+    appendKeyEvents(events, step, startMs);
+    return;
+  }
   if (step.kind === "dblclick") {
     appendDoubleClick(events, step, startMs);
     return;
@@ -156,7 +160,9 @@ function appendContinuousEvents(
   events: DriverEvent[],
   step: Exclude<
     ScenarioStep,
-    { kind: "wait" | "type" | "dblclick" | "drag" | "resize" }
+    {
+      kind: "wait" | "type" | "paste" | "key" | "dblclick" | "drag" | "resize";
+    }
   >,
   startMs: number,
   periodMs: number,
@@ -177,7 +183,9 @@ function appendContinuousEvents(
 function continuousParams(
   step: Exclude<
     ScenarioStep,
-    { kind: "wait" | "type" | "dblclick" | "drag" | "resize" }
+    {
+      kind: "wait" | "type" | "paste" | "key" | "dblclick" | "drag" | "resize";
+    }
   >,
   count: number,
 ): Record<string, unknown> {
@@ -341,24 +349,87 @@ function appendTypingEvents(
   characters.forEach((character, index) => {
     const atMs = startMs + index * intervalMs;
     const key = keyName(character);
+    const keyDownParams =
+      character === "\n"
+        ? {
+            type: "keyDown",
+            key,
+            code: "Enter",
+            windowsVirtualKeyCode: 13,
+            text: "\r",
+            unmodifiedText: "\r",
+          }
+        : {
+            type: "keyDown",
+            key,
+            text: character,
+            unmodifiedText: character,
+          };
     events.push({
       atMs,
       stepKind: step.kind,
       method: "Input.dispatchKeyEvent",
-      params: {
-        type: "keyDown",
-        key,
-        text: character,
-        unmodifiedText: character,
-      },
+      params: keyDownParams,
     });
+    const keyUpParams =
+      character === "\n"
+        ? { type: "keyUp", key, code: "Enter", windowsVirtualKeyCode: 13 }
+        : { type: "keyUp", key };
     events.push({
       atMs,
       stepKind: step.kind,
       method: "Input.dispatchKeyEvent",
-      params: { type: "keyUp", key },
+      params: keyUpParams,
     });
   });
+}
+
+function appendPasteEvent(
+  events: DriverEvent[],
+  step: Extract<ScenarioStep, { kind: "paste" }>,
+  startMs: number,
+): void {
+  events.push({
+    atMs: startMs,
+    stepKind: step.kind,
+    method: "Runtime.evaluate",
+    params: {
+      expression: `(() => {
+  const target = document.activeElement;
+  if (!(target instanceof HTMLElement)) throw new Error("no focused element to paste into");
+  const data = new DataTransfer();
+  data.setData("text/plain", ${JSON.stringify(step.text)});
+  target.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+})()`,
+    },
+  });
+}
+
+function appendKeyEvents(
+  events: DriverEvent[],
+  step: Extract<ScenarioStep, { kind: "key" }>,
+  startMs: number,
+): void {
+  const params = {
+    key: step.key,
+    code: step.code,
+    windowsVirtualKeyCode: step.keyCode,
+    ...(step.modifiers === undefined ? {} : { modifiers: step.modifiers }),
+  };
+  events.push(
+    {
+      atMs: startMs,
+      stepKind: step.kind,
+      method: "Input.dispatchKeyEvent",
+      params: { type: "rawKeyDown", ...params },
+    },
+    {
+      atMs: startMs,
+      stepKind: step.kind,
+      method: "Input.dispatchKeyEvent",
+      params: { type: "keyUp", ...params },
+    },
+  );
 }
 
 function appendDoubleClick(
@@ -366,27 +437,28 @@ function appendDoubleClick(
   step: Extract<ScenarioStep, { kind: "dblclick" }>,
   startMs: number,
 ): void {
-  const params = {
-    x: step.x,
-    y: step.y,
-    button: "left",
-    buttons: 1,
-    clickCount: 2,
-  };
-  events.push(
-    {
-      atMs: startMs,
-      stepKind: step.kind,
-      method: "Input.dispatchMouseEvent",
-      params: { type: "mousePressed", ...params },
-    },
-    {
-      atMs: startMs,
-      stepKind: step.kind,
-      method: "Input.dispatchMouseEvent",
-      params: { type: "mouseReleased", ...params, buttons: 0 },
-    },
-  );
+  for (const clickCount of [1, 2]) {
+    const params = {
+      x: step.x,
+      y: step.y,
+      button: "left",
+      clickCount,
+    };
+    events.push(
+      {
+        atMs: startMs,
+        stepKind: step.kind,
+        method: "Input.dispatchMouseEvent",
+        params: { type: "mousePressed", buttons: 1, ...params },
+      },
+      {
+        atMs: startMs,
+        stepKind: step.kind,
+        method: "Input.dispatchMouseEvent",
+        params: { type: "mouseReleased", buttons: 0, ...params },
+      },
+    );
+  }
 }
 
 function frameEventCount(durationMs: number, periodMs: number): number {
@@ -399,7 +471,29 @@ function stepDurationMs(step: ScenarioStep): number {
     return (Array.from(step.text).length * 1_000) / step.charsPerSecond;
   }
   if (step.kind === "dblclick") return 0;
+  if (step.kind === "paste" || step.kind === "key") return 0;
   return step.durationMs;
+}
+
+function sendEvent(cdp: CDPSession, event: DriverEvent): Promise<unknown> {
+  const ack = cdp.send(event.method as Parameters<CDPSession["send"]>[0], {
+    ...event.params,
+  });
+  if (event.method !== "Runtime.evaluate") return ack;
+  return ack.then((result) => {
+    if (hasExceptionDetails(result)) {
+      throw new Error("Runtime.evaluate returned exceptionDetails");
+    }
+    return result;
+  });
+}
+
+function hasExceptionDetails(ack: unknown): boolean {
+  return (
+    typeof ack === "object" &&
+    ack !== null &&
+    Object.prototype.hasOwnProperty.call(ack, "exceptionDetails")
+  );
 }
 
 function interpolate(start: number, end: number, fraction: number): number {

@@ -12,6 +12,12 @@ export interface RasterCellInput {
   readonly colorIndex: number;
 }
 
+export interface CellPlacement {
+  x: number;
+  line: number;
+  colorIndex: number;
+}
+
 export interface EncodedRasterCells {
   readonly cellCount: number;
   readonly units: Uint16Array;
@@ -19,6 +25,79 @@ export interface EncodedRasterCells {
   readonly xOffsets: Float32Array;
   readonly lineIndex: Int32Array;
   readonly colorIndex: Uint8Array;
+}
+
+export class RasterCellWriter {
+  private units = new Uint16Array(16);
+  private offsets = new Uint32Array(17);
+  private xOffsets = new Float32Array(16);
+  private lineIndex = new Int32Array(16);
+  private colorIndex = new Uint8Array(16);
+  private unitCount = 0;
+  private cellCount = 0;
+
+  reset(): void {
+    this.unitCount = 0;
+    this.cellCount = 0;
+  }
+
+  appendCluster(
+    source: string,
+    start: number,
+    end: number,
+    placement: Readonly<CellPlacement>,
+  ): void {
+    this.ensureCellCapacity();
+    this.ensureUnitCapacity(end - start);
+    this.offsets[this.cellCount] = this.unitCount;
+    for (let index = start; index < end; index += 1) {
+      this.units[this.unitCount] = source.charCodeAt(index);
+      this.unitCount += 1;
+    }
+    this.xOffsets[this.cellCount] = placement.x;
+    this.lineIndex[this.cellCount] = placement.line;
+    this.colorIndex[this.cellCount] = placement.colorIndex;
+    this.cellCount += 1;
+    this.offsets[this.cellCount] = this.unitCount;
+  }
+
+  finish(): EncodedRasterCells {
+    return {
+      cellCount: this.cellCount,
+      units: this.units.slice(0, this.unitCount),
+      offsets: this.offsets.slice(0, this.cellCount + 1),
+      xOffsets: this.xOffsets.slice(0, this.cellCount),
+      lineIndex: this.lineIndex.slice(0, this.cellCount),
+      colorIndex: this.colorIndex.slice(0, this.cellCount),
+    };
+  }
+
+  private ensureCellCapacity(): void {
+    if (this.cellCount < this.xOffsets.length) return;
+    const nextCapacity = this.xOffsets.length * 2;
+    const xOffsets = new Float32Array(nextCapacity);
+    const lineIndex = new Int32Array(nextCapacity);
+    const colorIndex = new Uint8Array(nextCapacity);
+    const offsets = new Uint32Array(nextCapacity + 1);
+    xOffsets.set(this.xOffsets);
+    lineIndex.set(this.lineIndex);
+    colorIndex.set(this.colorIndex);
+    offsets.set(this.offsets);
+    this.xOffsets = xOffsets;
+    this.lineIndex = lineIndex;
+    this.colorIndex = colorIndex;
+    this.offsets = offsets;
+  }
+
+  private ensureUnitCapacity(additionalUnits: number): void {
+    const requiredCapacity = this.unitCount + additionalUnits;
+    if (requiredCapacity <= this.units.length) return;
+    let nextCapacity = this.units.length;
+    while (nextCapacity < requiredCapacity) nextCapacity *= 2;
+    const units = new Uint16Array(nextCapacity);
+    units.set(this.units);
+    this.units = units;
+  }
 }
 
 export function encodeRasterCells(
@@ -98,6 +177,8 @@ export interface RasterJob {
   readonly originY: number;
   readonly outlineColor: string;
   readonly outlineWidth: number;
+  readonly width: number;
+  readonly height: number;
   readonly cells: EncodedRasterCells;
 }
 

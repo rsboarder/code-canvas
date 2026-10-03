@@ -1,14 +1,22 @@
-export { DocumentResidency } from "./application/document-residency";
+export { DocumentResidency } from "./application/document-residency/index";
 export type {
-  FallbackDocument,
+  DocumentResidencyOptions,
   GpuUploader,
   LineRange,
+  LineWindow,
+  MinimapUpload,
   TokenizedLines,
   Tokenizer,
-} from "./application/document-residency";
-export { LineLayout } from "./domain/line-layout";
+} from "./application/document-residency/index";
+export { createLineGeometry, LineLayout } from "./domain/line-layout";
 export {
   MINIMAP_LINE_METRICS,
   type LayoutCell,
+  type LineGeometry,
   type LineMetrics,
 } from "./domain/line-layout";
+export type { ThemePalette } from "./domain/theme-palette";
+export {
+  TokenizedDocument,
+  type PackedTokenRuns,
+} from "./domain/tokenized-document";

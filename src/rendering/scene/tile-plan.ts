@@ -124,3 +124,15 @@ export function computeTilePoolCapacity(
     2 * MARGIN_RING_TILES;
   return columns * rows * 2;
 }
+
+export function tilePoolGrowthTarget(
+  need: number,
+  capacity: number,
+  columns: number,
+  maxSlots: number,
+): number {
+  if (need <= capacity) return capacity;
+  const target = Math.ceil((need * 1.25) / columns) * columns;
+  const capped = Math.floor(maxSlots / columns) * columns;
+  return Math.max(capacity, Math.min(target, capped));
+}

@@ -23,6 +23,7 @@ class FakePool {
 }
 
 const SOURCE: TileRecordSource = {
+  fileId: "file-a",
   filePath: "src/a.ts",
   contentVersion: 7,
   highlighted: true,
@@ -46,6 +47,21 @@ describe("TileRecords", () => {
     expect(records.findRecordByKey(records.keys[content] ?? "")).toBe(content);
     expect(records.records.kind[content]).toBe(CONTENT_KIND);
     expect(records.records.kind[header]).toBe(HEADER_KIND);
+  });
+
+  it("uses the file id to keep identical tiles from different widgets unique", () => {
+    const first = new TileRecords(new FakePool(), 8);
+    const second = new TileRecords(new FakePool(), 8);
+    first.setContentSource(SOURCE, 1);
+    second.setContentSource(
+      { ...SOURCE, fileId: "file-b", filePath: "src/b.ts" },
+      1,
+    );
+
+    const firstRecord = first.ensureRecord(CONTENT_KIND, 2, 1, 2);
+    const secondRecord = second.ensureRecord(CONTENT_KIND, 2, 1, 2);
+
+    expect(first.keys[firstRecord]).not.toBe(second.keys[secondRecord]);
   });
 
   it("releases labels when their file path changes", () => {

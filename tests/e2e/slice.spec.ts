@@ -8,103 +8,18 @@ import {
   PINCH_WHEEL_DELTA_PER_LN_SCALE,
 } from "../../src/shared/pinch";
 import { DEFAULT_CODE_FONT } from "../../src/shared/font";
+import {
+  collectBrowserErrors,
+  expectHighlighted,
+  installDirectoryMock,
+  openFolder,
+} from "./support";
 
 const referenceFile = resolve(
   "fixtures/reference-dataset/group-00/widget-000.tsx",
 );
 
 test.use({ deviceScaleFactor: 2 });
-
-function collectBrowserErrors(page: Page): string[] {
-  const errors: string[] = [];
-  page.on("pageerror", (error) => {
-    errors.push(`PAGEERROR: ${error.message}`);
-  });
-  page.on("console", (message) => {
-    if (message.type() === "error") {
-      errors.push(`CONSOLE: ${message.text()}`);
-    }
-  });
-  return errors;
-}
-
-async function expectHighlighted(
-  page: Page,
-  browserErrors: string[],
-): Promise<void> {
-  try {
-    await expect(page.getByTestId("canvas")).toHaveAttribute(
-      "data-highlighted",
-      "true",
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `${message}\nBrowser diagnostics:\n${browserErrors.join("\n")}`,
-    );
-  }
-}
-
-async function installDirectoryMock(page: Page, text: string): Promise<void> {
-  await page.addInitScript((fileText: string) => {
-    const file = {
-      kind: "file",
-      name: "widget-000.tsx",
-      getFile: () =>
-        Promise.resolve(
-          new File([fileText], "widget-000.tsx", { type: "text/plain" }),
-        ),
-    };
-    const directory = {
-      kind: "directory",
-      name: "workspace",
-      entries: async function* () {
-        await Promise.resolve();
-        yield ["widget-000.tsx", file];
-      },
-    };
-    Object.defineProperty(window, "showDirectoryPicker", {
-      configurable: true,
-      value: () => Promise.resolve(directory),
-    });
-  }, text);
-}
-
-async function installReferenceDirectoryMock(
-  page: Page,
-  text: string,
-): Promise<void> {
-  await page.addInitScript((fileText: string) => {
-    const file = {
-      kind: "file",
-      name: "widget-000.tsx",
-      getFile: () =>
-        Promise.resolve(
-          new File([fileText], "widget-000.tsx", { type: "text/plain" }),
-        ),
-    };
-    const group = {
-      kind: "directory",
-      name: "group-00",
-      entries: async function* () {
-        await Promise.resolve();
-        yield ["widget-000.tsx", file];
-      },
-    };
-    const directory = {
-      kind: "directory",
-      name: "workspace",
-      entries: async function* () {
-        await Promise.resolve();
-        yield ["group-00", group];
-      },
-    };
-    Object.defineProperty(window, "showDirectoryPicker", {
-      configurable: true,
-      value: () => Promise.resolve(directory),
-    });
-  }, text);
-}
 
 interface WidgetBodyRect {
   readonly x: number;
@@ -579,11 +494,16 @@ test("Displaying a file", async ({ page }) => {
     "Reference Dataset file is missing; run pnpm fixtures.",
   );
   if (!existsSync(referenceFile)) return;
-  await installDirectoryMock(page, readFileSync(referenceFile, "utf8"));
+  await installDirectoryMock(
+    page,
+    readFileSync(referenceFile, "utf8"),
+    "group-00/widget-000.tsx",
+  );
   await page.goto("/");
-  await page.getByTestId("open-folder").click();
+  await openFolder(page);
   await expectHighlighted(page, browserErrors);
   const zoomPoint = { x: 400, y: 300 };
+  const panPoint = { x: 400, y: 90 };
   await assertHeaderLabel(page);
   await readScreenshotPattern(page, {
     requiredDistinct: 4,
@@ -592,7 +512,7 @@ test("Displaying a file", async ({ page }) => {
   await page.screenshot({
     path: "test-results/slice/displaying-a-file-text.png",
   });
-  await page.getByTestId("canvas").hover({ position: zoomPoint });
+  await page.getByTestId("canvas").hover({ position: panPoint });
   await page.mouse.wheel(80, 40);
   await page.screenshot({
     path: "test-results/slice/displaying-a-file-pan.png",
@@ -625,7 +545,7 @@ test("Zooming out to the minimap", async ({ page }) => {
       "const answer: number = 42;\nexport function read() { return answer; }\n",
     );
     await page.goto("/");
-    await page.getByTestId("open-folder").click();
+    await openFolder(page);
     await expectHighlighted(page, browserErrors);
     await page.getByTestId("canvas").hover({ position: zoomPoint });
     await zoomUntilDetail(page, 120, "minimap", zoomPoint);
@@ -651,12 +571,13 @@ test("Zooming out to the minimap", async ({ page }) => {
     "Reference Dataset file is missing; run pnpm fixtures.",
   );
   await test.step("2000-line reference file", async () => {
-    await installReferenceDirectoryMock(
+    await installDirectoryMock(
       page,
       readFileSync(referenceFile, "utf8"),
+      "group-00/widget-000.tsx",
     );
     await page.goto("/");
-    await page.getByTestId("open-folder").click();
+    await openFolder(page);
     await expectHighlighted(page, browserErrors);
     await page.getByTestId("canvas").hover({ position: zoomPoint });
     await zoomUntilDetail(page, 120, "minimap", zoomPoint);
@@ -678,7 +599,7 @@ test("Transition without flicker", async ({ page }) => {
     "export function widget(value: number): number {\n  return value * 2;\n}\n",
   );
   await page.goto("/");
-  await page.getByTestId("open-folder").click();
+  await openFolder(page);
   await expect(page.getByTestId("canvas")).toHaveAttribute(
     "data-highlighted",
     "true",
@@ -726,7 +647,7 @@ test("Jumps from Minimap to Text without a gesture", async ({ page }) => {
     "export function widget(value: number): number {\n  return value * 2;\n}\n",
   );
   await page.goto("/");
-  await page.getByTestId("open-folder").click();
+  await openFolder(page);
   const canvas = page.getByTestId("canvas");
   await expect(canvas).toHaveAttribute("data-highlighted", "true");
   await pinchZoomTo(page, 0.2, { x: 400, y: 130 });

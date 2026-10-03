@@ -20,8 +20,29 @@ export interface PerfFile {
   readonly text: string;
 }
 
+export interface SettleState {
+  readonly frameLoopIdle: boolean;
+  readonly syntheticLoadActive: boolean;
+  readonly tilesSettled: boolean;
+  readonly residencyBacklog: number;
+  readonly tokenizationPending: number;
+  readonly textSwitchPending: boolean;
+  readonly tilePoolCapacity: number;
+  readonly tileRequests: number;
+  readonly tilesPinned: number;
+  readonly tilesInFlight: number;
+  readonly tilesPosted: number;
+  readonly tilesStale: number;
+  readonly tilesUploadFailed: number;
+  readonly tilesVisibleExact: boolean;
+  readonly tilesClockRunning: boolean;
+  readonly tilesGestureActive: boolean;
+  readonly tilesMinimapActive: boolean;
+}
+
 export interface PerfBridge {
   snapshot(): FrameStatsSnapshot;
+  settleState(): SettleState;
   reset(): void;
   nearestRank(values: readonly number[], percentile: number): Statistic;
   countLongIntervals(
@@ -36,6 +57,8 @@ export interface PerfBridge {
     readonly cpuMs: number;
     readonly gpuIterations: number;
   }): void;
+  // Resolves once the Editing Session of the widget with this path is visible.
+  beginEditing(path: string): Promise<void>;
 }
 
 declare global {

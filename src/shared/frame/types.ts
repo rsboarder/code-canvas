@@ -1,5 +1,10 @@
 export type DetailLevelName = "text" | "minimap";
 
+export interface FrameStage {
+  readonly name: string;
+  run(): void;
+}
+
 export interface FrameStageTiming {
   readonly name: string;
   durationMs: number;
@@ -7,8 +12,10 @@ export interface FrameStageTiming {
 
 export interface FrameSample {
   frameStartTime: number;
+  afterIdle?: boolean;
   readonly stageTimings: readonly FrameStageTiming[];
   detailLevel?: DetailLevelName;
+  textSwitchPending?: boolean;
   visibleWidgetCount?: number;
   residencyBacklogDepth?: number;
   // Text Tiles metrics (design D6 "Tile pool", "Zoom"): the tile pool's

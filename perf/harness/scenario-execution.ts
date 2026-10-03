@@ -3,6 +3,11 @@ import type { CDPSession, Page } from "@playwright/test";
 import { runEvents, planEvents } from "./driver";
 import { bridgeMetricsFromSnapshot, type BridgeMetrics } from "./metrics";
 import {
+  SETTLE_TIMEOUT_MS,
+  unsettledDetail,
+  waitForSettledApplication,
+} from "./settle";
+import {
   cameraForScenario,
   cameraRangeWithinTolerance,
   cameraWithinTolerance,
@@ -65,6 +70,8 @@ export async function runScenario(
     };
   }
 
+  const bridgeMetrics = await readBridgeMetrics(page);
+
   const gesture = gestureTiming(gestureWallTimeMs, scenario.durationMs);
   if (gesture.ratio > GESTURE_WALL_TIME_RATIO_LIMIT)
     return {
@@ -75,7 +82,62 @@ export async function runScenario(
         `exceeds ${String(GESTURE_WALL_TIME_RATIO_LIMIT)}x the planned ${String(scenario.durationMs)} ms`,
     };
 
+  const settledBridgeMetrics = await readSettledBridgeMetrics(page, scenario);
+  if ("valid" in settledBridgeMetrics) return settledBridgeMetrics;
+  const metrics =
+    settledBridgeMetrics.timeToSharpMs === undefined
+      ? bridgeMetrics
+      : {
+          ...bridgeMetrics,
+          timeToSharpMs: settledBridgeMetrics.timeToSharpMs,
+        };
+
   const { camera, cameraRange } = await evaluateCameraChecks(page, scenario);
+  const cameraError = cameraFailure(scenario, camera, cameraRange);
+  if (cameraError) return cameraError;
+
+  const classified = await classifyTrace(result, {
+    applicationMarkers: ["127.0.0.1", "localhost"],
+    bridgeMetrics: metrics,
+  });
+  if (mode === "stages")
+    return stageClassification(classified, result, metrics, {
+      gesture,
+      camera,
+      cameraRange,
+    });
+  if (!classified.valid) return classified;
+  return {
+    valid: true,
+    metrics: {
+      ...scenarioRunMetricsFromTrace(classified, metrics),
+      gesture,
+      camera,
+      cameraRange,
+    },
+    trace: result,
+  };
+}
+
+async function readSettledBridgeMetrics(
+  page: Page,
+  scenario: Scenario,
+): Promise<BridgeMetrics | InvalidMeasurement> {
+  const settled = await waitForSettledApplication(page, SETTLE_TIMEOUT_MS);
+  if (!settled.settled)
+    return {
+      valid: false,
+      reason: "app-not-settled",
+      detail: unsettledDetail(scenario.name, "after the gesture", settled),
+    };
+  return readBridgeMetrics(page);
+}
+
+function cameraFailure(
+  scenario: Scenario,
+  camera: CameraCheck,
+  cameraRange: CameraRangeCheck,
+): InvalidMeasurement | undefined {
   if (camera.checked && !camera.withinTolerance)
     return {
       valid: false,
@@ -92,29 +154,7 @@ export async function runScenario(
         `${scenario.name}: recorded scale range ${JSON.stringify(cameraRange.recorded)} ` +
         `does not match planned ${JSON.stringify(cameraRange.planned)}`,
     };
-
-  const bridgeMetrics = await readBridgeMetrics(page);
-  const classified = await classifyTrace(result, {
-    applicationMarkers: ["127.0.0.1", "localhost"],
-    bridgeMetrics,
-  });
-  if (mode === "stages")
-    return stageClassification(classified, result, bridgeMetrics, {
-      gesture,
-      camera,
-      cameraRange,
-    });
-  if (!classified.valid) return classified;
-  return {
-    valid: true,
-    metrics: {
-      ...scenarioRunMetricsFromTrace(classified, bridgeMetrics),
-      gesture,
-      camera,
-      cameraRange,
-    },
-    trace: result,
-  };
+  return undefined;
 }
 
 export function scenarioRunMetricsWithBridge(
@@ -126,6 +166,8 @@ export function scenarioRunMetricsWithBridge(
     tileMemoryBytes: bridge.tileMemoryBytes ?? "unavailable",
     missingTileFrameCount: bridge.missingTileFrameCount ?? 0,
     timeToSharpMs: bridge.timeToSharpMs ?? "unavailable",
+    textSwitchLagMs: bridge.textSwitchLagMs ?? "unavailable",
+    residencyBacklog: bridge.residencyBacklog,
   };
 }
 

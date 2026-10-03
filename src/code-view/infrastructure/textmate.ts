@@ -1,65 +1,9 @@
-import {
-  Registry,
-  type IGrammar,
-  type IRawGrammar,
-  type IRawTheme,
-} from "vscode-textmate";
+import { Registry, type IGrammar, type IRawGrammar } from "vscode-textmate";
 import { OnigScanner, OnigString, loadWASM } from "vscode-oniguruma";
 import onigWasmUrl from "vscode-oniguruma/release/onig.wasm?url";
 import tsGrammar from "tm-grammars/grammars/typescript.json";
 import tsxGrammar from "tm-grammars/grammars/tsx.json";
-import darkPlus from "tm-themes/themes/dark-plus.json";
-import { themePalette } from "./theme";
-
-interface ThemeEntry {
-  readonly scope?: string | string[];
-  readonly settings?: {
-    readonly foreground?: string;
-    readonly background?: string;
-    readonly fontStyle?: string;
-  };
-}
-
-interface ThemeJson {
-  readonly name?: string;
-  readonly colors?: Record<string, string>;
-  readonly tokenColors?: readonly ThemeEntry[];
-}
-
-const sourceTheme = darkPlus as ThemeJson;
-interface RawThemeSetting {
-  readonly scope?: string | string[];
-  readonly settings: {
-    readonly foreground?: string;
-    readonly background?: string;
-    readonly fontStyle?: string;
-  };
-}
-
-function themeSetting(entry: ThemeEntry): RawThemeSetting {
-  const settings = entry.settings ?? {};
-  return {
-    ...(entry.scope ? { scope: entry.scope } : {}),
-    settings: {
-      ...(settings.foreground ? { foreground: settings.foreground } : {}),
-      ...(settings.background ? { background: settings.background } : {}),
-      ...(settings.fontStyle ? { fontStyle: settings.fontStyle } : {}),
-    },
-  };
-}
-
-const rawTheme: IRawTheme = {
-  ...(sourceTheme.name ? { name: sourceTheme.name } : {}),
-  settings: [
-    {
-      settings: {
-        foreground: themePalette.foreground,
-        background: themePalette.background,
-      },
-    },
-    ...(sourceTheme.tokenColors ?? []).map(themeSetting),
-  ],
-};
+import { textMateTheme } from "./theme";
 
 let wasmReady: Promise<void> | undefined;
 
@@ -90,7 +34,7 @@ export async function createTextMateRuntime(): Promise<TextMateRuntime> {
   ]);
   const registry = new Registry({
     onigLib: onigLib(),
-    theme: rawTheme,
+    theme: textMateTheme,
     loadGrammar: (scopeName) =>
       Promise.resolve(grammars.get(scopeName) ?? null),
   });

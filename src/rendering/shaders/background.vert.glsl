@@ -4,13 +4,25 @@ uniform vec2 resolution;
 uniform float devicePixelRatio;
 uniform vec2 cameraOffset;
 uniform float cameraScale;
-uniform vec4 widget;
-out vec2 worldPosition;
+uniform sampler2D widgetTable;
+uniform int rowCount;
+out vec2 localPosition;
+flat out vec4 widgetFrame;
+flat out vec2 scrollState;
 
 void main() {
-  vec2 world = widget.xy + position * widget.zw;
+  if (gl_InstanceID >= rowCount) {
+    gl_Position = vec4(0.0);
+    return;
+  }
+  vec4 frame = texelFetch(widgetTable, ivec2(0, gl_InstanceID), 0);
+  vec4 scroll = texelFetch(widgetTable, ivec2(1, gl_InstanceID), 0);
+  vec2 world = frame.xy + position * frame.zw;
   vec2 pixel = (world * cameraScale + cameraOffset) * devicePixelRatio;
   vec2 clip = pixel / resolution * 2.0 - 1.0;
-  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
-  worldPosition = world;
+  float depth = scroll.y;
+  gl_Position = vec4(clip.x, -clip.y, depth * 2.0 - 1.0, 1.0);
+  localPosition = position;
+  widgetFrame = frame;
+  scrollState = vec2(scroll.x, scroll.z);
 }

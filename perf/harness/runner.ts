@@ -6,6 +6,7 @@ import { chromium, type CDPSession, type Page } from "@playwright/test";
 
 import { checkCoverage, requiredScenarios } from "./coverage";
 import {
+  classifyNoiseFloor,
   collectEnvironment,
   evaluateNoiseFloor,
   evaluatePreflight,
@@ -28,30 +29,45 @@ import {
 } from "./report";
 import { runScenario } from "./scenario-execution";
 import {
-  recordTrace,
-  type InvalidMeasurement,
-  type TraceMetrics,
-} from "./trace";
+  SETTLE_TIMEOUT_MS,
+  unsettledDetail,
+  waitForSettledApplication,
+} from "./settle";
+import {
+  errorMessage,
+  missingBridgeCommands,
+  openReferenceFolder,
+  prepareInitialLoadRun,
+  prepareScenarioRun,
+  waitForApplicationBridge,
+} from "./run-preparation";
+import { recordTrace, type InvalidMeasurement } from "./trace";
 import { HEADED_WINDOW_ARGS, openHarnessPage } from "./harness-page";
+import { scenarioAtDevicePixelRatio } from "./scenario-scale";
 import type { PerfFile } from "../../src/performance/bridge";
-import type { Scenario } from "../scenarios/schema";
+import { isEditorOnlyScenario, type Scenario } from "../scenarios/schema";
 import panScenario from "../scenarios/pan-whole-canvas";
 import zoomScenario from "../scenarios/zoom-fit-to-four";
 import densityScenario from "../scenarios/worst-case-text-density";
 import manipulationScenario from "../scenarios/drag-resize-scroll";
 import typingScenario from "../scenarios/typing";
+import largeEditScenario from "../scenarios/large-edit";
 import loadScenario from "../scenarios/pan-initial-load";
+
+type ScenarioBudgetOverride = NonNullable<
+  BudgetConfig["scenarioOverrides"]
+>[string];
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_DATASET_ROOT = "fixtures/reference-dataset";
 const DEFAULT_PREVIEW_PORT = 4173;
-const BRIDGE_WAIT_TIMEOUT_MS = 10_000;
 const scenarioList = [
   panScenario,
   zoomScenario,
   densityScenario,
   manipulationScenario,
   typingScenario,
+  largeEditScenario,
   loadScenario,
 ];
 
@@ -79,6 +95,7 @@ export interface ScenarioRunnerDependencies {
   readonly resultDirectory?: string;
   readonly selectedScenario?: string;
   readonly coverageScenarios?: readonly Scenario[];
+  readonly referenceFiles?: readonly PerfFile[];
 }
 
 export interface HarnessOptions {
@@ -114,7 +131,7 @@ export async function runMeasuredScenarios(
     );
   }
   if (options.mode === "full") {
-    const noiseFloor =
+    const measuredNoiseFloor =
       options.noiseFloor ??
       (await measureNoiseFloor({
         page: options.page,
@@ -123,6 +140,13 @@ export async function runMeasuredScenarios(
         recordTrace,
         classifyTrace: classifyNoiseFloor,
       }));
+    if ("valid" in measuredNoiseFloor)
+      return invalidResult(
+        options.mode,
+        `noise floor measurement invalid: ${measuredNoiseFloor.reason}${measuredNoiseFloor.detail ? `: ${measuredNoiseFloor.detail}` : ""}`,
+        options.environment,
+      );
+    const noiseFloor = measuredNoiseFloor;
     if (!evaluateNoiseFloor(noiseFloor).valid)
       return invalidResult(
         options.mode,
@@ -148,7 +172,12 @@ async function measureScenarios(
       options.resultDirectory,
     );
   const evaluations = [];
-  for (const scenario of scenarios) {
+  const devicePixelRatio = await options.page.evaluate(
+    () => window.devicePixelRatio,
+  );
+  for (const scenario of scenarios.map((item) =>
+    scenarioAtDevicePixelRatio(item, devicePixelRatio),
+  )) {
     const missing = await missingBridgeCommands(options.page, scenario);
     if (missing.length > 0)
       return invalidResult(
@@ -172,6 +201,7 @@ async function measureScenarios(
       noiseFloor: noiseFloor ?? emptyNoiseFloor(),
       durationMs: scenario.durationMs,
       stageTiming: options.mode === "stages",
+      frameSamplesExpected: !isEditorOnlyScenario(scenario),
       ...(options.baseline ? { baseline: options.baseline } : {}),
     };
     const evaluation = evaluateScenario(evaluationOptions);
@@ -211,7 +241,26 @@ async function collectMeasuredRuns(
   const runs: ScenarioRun[] = [];
   const totalRuns = options.budgets.warmupRuns + options.budgets.measuredRuns;
   for (let run = 0; run < totalRuns; run += 1) {
-    await prepareScenarioRun(options.page, scenario);
+    const preparation = scenario.setup.initialLoad
+      ? await prepareInitialLoadRun(
+          options.page,
+          scenario,
+          options.referenceFiles,
+        )
+      : await prepareScenarioRun(options.page, scenario);
+    if (preparation) return preparation;
+    if (!scenario.setup.initialLoad) {
+      const settled = await waitForSettledApplication(
+        options.page,
+        SETTLE_TIMEOUT_MS,
+      );
+      if (!settled.settled)
+        return {
+          valid: false,
+          reason: "app-not-settled",
+          detail: unsettledDetail(scenario.name, "before the run", settled),
+        };
+    }
     const result = await runScenario(
       options.page,
       options.cdp,
@@ -241,46 +290,6 @@ function selectScenarios(
 ): readonly Scenario[] {
   if (!selected) return scenarios;
   return scenarios.filter((scenario) => scenario.name === selected);
-}
-
-export async function missingBridgeCommands(
-  page: Page,
-  scenario: Scenario,
-): Promise<string[]> {
-  const required = [...(scenario.setup.requiresBridgeCommands ?? [])];
-  if (scenario.setup.camera && !required.includes("setCamera"))
-    required.push("setCamera");
-  if (scenario.setup.camera && !required.includes("camera"))
-    required.push("camera");
-  if (scenario.setup.camera && !required.includes("cameraRange"))
-    required.push("cameraRange");
-  return page.evaluate((commands) => {
-    const bridge = window.__perf as unknown as
-      Record<string, unknown> | undefined;
-    return commands.filter(
-      (command) => typeof bridge?.[command] !== "function",
-    );
-  }, required);
-}
-
-export async function prepareScenarioRun(
-  page: Page,
-  scenario: Scenario,
-): Promise<void> {
-  const camera = scenario.setup.camera;
-  if (!camera) return;
-  await page.evaluate(
-    (value) => window.__perf?.setCamera(value.x, value.y, value.scale),
-    camera,
-  );
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => {
-          resolve();
-        });
-      }),
-  );
 }
 
 async function writeTrace(
@@ -385,28 +394,6 @@ function emptyNoiseFloor(): NoiseFloor {
   };
 }
 
-function classifyNoiseFloor(result: unknown): NoiseFloor {
-  if (!isTraceClassification(result)) return emptyNoiseFloor();
-  const intervals =
-    typeof result.intervalsOver12_5Ms === "number"
-      ? result.intervalsOver12_5Ms
-      : 0;
-  return {
-    droppedFramesPerMinute: result.frames.dropped,
-    partiallyPresentedFramesPerMinute: result.frames.partiallyPresented,
-    intervalsOver12_5MsPerMinute: intervals,
-  };
-}
-
-function isTraceClassification(value: unknown): value is TraceMetrics {
-  return (
-    isRecord(value) &&
-    value.valid === true &&
-    isRecord(value.frames) &&
-    isRecord(value.intervalsMs)
-  );
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -433,21 +420,79 @@ export async function loadBudgetConfig(
 ): Promise<BudgetConfig> {
   const raw = JSON.parse(await readFile(path, "utf8")) as Record<
     string,
-    { value: number } | number
+    unknown
   >;
+  const scenarioOverrides = parseScenarioOverrides(raw.scenarioOverrides);
   return {
     warmupRuns: budgetValue(raw.warmupRuns),
     measuredRuns: budgetValue(raw.measuredRuns),
     applicationTaskMs: budgetValue(raw.applicationTaskMs),
     longIntervalMs: budgetValue(raw.longIntervalMs),
     allowedRegression: budgetValue(raw.allowedRegression),
+    ...(scenarioOverrides ? { scenarioOverrides } : {}),
   };
 }
 
-function budgetValue(value: { value: number } | number | undefined): number {
+function budgetValue(value: unknown): number {
   if (typeof value === "number") return value;
-  if (value && typeof value.value === "number") return value.value;
+  if (isRecord(value) && typeof value.value === "number") return value.value;
   throw new TypeError("budget value is missing");
+}
+
+function parseScenarioOverrides(
+  entry: unknown,
+): Record<string, ScenarioBudgetOverride> | undefined {
+  if (entry === undefined) return undefined;
+  if (!isPlainRecord(entry) || !isPlainRecord(entry.value))
+    throw new TypeError("scenario overrides value is missing");
+  const overrides: Record<string, ScenarioBudgetOverride> = {};
+  for (const [scenario, value] of Object.entries(entry.value)) {
+    overrides[scenario] = parseScenarioOverride(scenario, value);
+  }
+  return overrides;
+}
+
+function parseScenarioOverride(
+  scenario: string,
+  value: unknown,
+): ScenarioBudgetOverride {
+  if (!isPlainRecord(value)) throw invalidScenarioOverride(scenario);
+  const applicationTaskMs = value.applicationTaskMs;
+  const extraMissedFramesPerRun = value.extraMissedFramesPerRun;
+  if (applicationTaskMs === undefined && extraMissedFramesPerRun === undefined)
+    throw invalidScenarioOverride(scenario);
+  if (
+    applicationTaskMs !== undefined &&
+    !isPositiveFiniteNumber(applicationTaskMs)
+  )
+    throw invalidScenarioOverride(scenario);
+  if (
+    extraMissedFramesPerRun !== undefined &&
+    !isNonnegativeInteger(extraMissedFramesPerRun)
+  )
+    throw invalidScenarioOverride(scenario);
+  return {
+    ...(applicationTaskMs === undefined ? {} : { applicationTaskMs }),
+    ...(extraMissedFramesPerRun === undefined
+      ? {}
+      : { extraMissedFramesPerRun }),
+  };
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function isNonnegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function invalidScenarioOverride(scenario: string): TypeError {
+  return new TypeError(`invalid budget override for scenario "${scenario}"`);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function runHarness(
@@ -501,6 +546,9 @@ async function runLiveHarness(options: HarnessOptions): Promise<HarnessResult> {
     await gotoPreview(page, DEFAULT_PREVIEW_PORT);
     if (!(await waitForApplicationBridge(page)))
       return invalidResult(options.mode, "application bridge is unavailable");
+    const setup = await prepareLiveHarness(browser, page, options.mode);
+    if ("verdict" in setup) return setup;
+    const { cdp, environment, noiseFloor } = setup;
     let files: PerfFile[];
     try {
       files = await readReferenceFiles();
@@ -514,18 +562,6 @@ async function runLiveHarness(options: HarnessOptions): Promise<HarnessResult> {
       return invalidResult(options.mode, "reference dataset is unavailable");
     const openError = await openReferenceFolder(page, files);
     if (openError) return invalidResult(options.mode, openError);
-    const cdp = await page.context().newCDPSession(page);
-    const environment =
-      options.mode === "full"
-        ? await collectEnvironment(browser, page, cdp, runSystemCommand)
-        : undefined;
-    const preflight = environment && evaluatePreflight(environment);
-    if (preflight && !preflight.valid)
-      return invalidResult(
-        options.mode,
-        `preflight failed: ${preflight.reasons.join("; ")}`,
-        environment,
-      );
     const baseline = await loadBaseline();
     const dependencies = {
       page,
@@ -540,7 +576,9 @@ async function runLiveHarness(options: HarnessOptions): Promise<HarnessResult> {
       ),
       resultDirectory: resultDirectory(options.mode),
       ...(environment ? { environment } : {}),
+      ...(noiseFloor ? { noiseFloor } : {}),
       ...(baseline ? { baseline } : {}),
+      referenceFiles: files,
     };
     return await runMeasuredScenarios(dependencies);
   } finally {
@@ -550,6 +588,54 @@ async function runLiveHarness(options: HarnessOptions): Promise<HarnessResult> {
       preview?.kill();
     }
   }
+}
+
+interface LiveHarnessSetup {
+  readonly cdp: CDPSession;
+  readonly environment:
+    Awaited<ReturnType<typeof collectEnvironment>> | undefined;
+  readonly noiseFloor?: NoiseFloor;
+}
+
+async function prepareLiveHarness(
+  browser: Awaited<ReturnType<typeof chromium.launch>>,
+  page: Page,
+  mode: HarnessMode,
+): Promise<LiveHarnessSetup | HarnessResult> {
+  const cdp = await page.context().newCDPSession(page);
+  const environment =
+    mode === "full"
+      ? await collectEnvironment(browser, page, cdp, runSystemCommand)
+      : undefined;
+  const preflight = environment && evaluatePreflight(environment);
+  if (preflight && !preflight.valid)
+    return invalidResult(
+      mode,
+      `preflight failed: ${preflight.reasons.join("; ")}`,
+      environment,
+    );
+  if (mode !== "full") return { cdp, environment };
+  const measuredNoiseFloor = await measureNoiseFloor({
+    page,
+    cdp,
+    durationMs: 60_000,
+    recordTrace,
+    classifyTrace: classifyNoiseFloor,
+  });
+  if ("valid" in measuredNoiseFloor)
+    return invalidResult(
+      mode,
+      `noise floor measurement invalid: ${measuredNoiseFloor.reason}${measuredNoiseFloor.detail ? `: ${measuredNoiseFloor.detail}` : ""}`,
+      environment,
+    );
+  if (!evaluateNoiseFloor(measuredNoiseFloor).valid)
+    return invalidResult(
+      mode,
+      "noise floor exceeds the reference threshold",
+      environment,
+      measuredNoiseFloor,
+    );
+  return { cdp, environment, noiseFloor: measuredNoiseFloor };
 }
 
 export function previewArguments(port: number): string[] {
@@ -566,32 +652,6 @@ export function previewArguments(port: number): string[] {
 
 export function previewUrl(port: number): string {
   return `http://127.0.0.1:${String(port)}`;
-}
-
-export async function waitForApplicationBridge(page: Page): Promise<boolean> {
-  try {
-    await page.waitForFunction(() => window.__perf !== undefined, undefined, {
-      timeout: BRIDGE_WAIT_TIMEOUT_MS,
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function openReferenceFolder(
-  page: Page,
-  files: PerfFile[],
-): Promise<string | undefined> {
-  try {
-    await page.evaluate(
-      (referenceFiles) => window.__perf?.openFolder(referenceFiles),
-      files,
-    );
-    return undefined;
-  } catch (error: unknown) {
-    return `application bridge openFolder failed: ${errorMessage(error)}`;
-  }
 }
 
 async function gotoPreview(page: Page, port: number): Promise<void> {
@@ -701,10 +761,6 @@ function errorCode(error: unknown): string | undefined {
     return undefined;
   const code = (error as { code?: unknown }).code;
   return typeof code === "string" ? code : undefined;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 async function runSystemCommand(

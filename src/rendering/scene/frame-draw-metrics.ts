@@ -1,8 +1,10 @@
 export interface FrameDrawMetrics {
   tileMemoryBytes: number;
   missingTile: boolean;
+  visibleWidgetCount: number;
   drawnTileCount: number;
   drawnLabelTileCount: number;
+  drawnMinimapCount: number;
   drawnFallbackTileCount: number;
   drawnUnhighlightedTileCount: number;
   lowestEpochDrawn: number;
@@ -14,13 +16,16 @@ interface DrawnTileMetrics {
   readonly content: boolean;
   readonly fallback: boolean;
   readonly highlighted: boolean;
+  readonly document?: boolean;
   readonly epoch: number;
   readonly contentVersion: number;
 }
 
 export function resetFrameDrawMetrics(metrics: FrameDrawMetrics): void {
+  metrics.visibleWidgetCount = 0;
   metrics.drawnTileCount = 0;
   metrics.drawnLabelTileCount = 0;
+  metrics.drawnMinimapCount = 0;
   metrics.drawnFallbackTileCount = 0;
   metrics.drawnUnhighlightedTileCount = 0;
   metrics.lowestEpochDrawn = -1;
@@ -34,16 +39,20 @@ export function recordDrawMetrics(
   metrics.drawnTileCount += 1;
   if (!tile.content) metrics.drawnLabelTileCount += 1;
   if (tile.fallback) metrics.drawnFallbackTileCount += 1;
-  if (tile.content && !tile.highlighted) {
+  if (tile.document !== false && tile.content && !tile.highlighted) {
     metrics.drawnUnhighlightedTileCount += 1;
   }
-  if (metrics.lowestEpochDrawn < 0 || tile.epoch < metrics.lowestEpochDrawn) {
+  if (
+    tile.document !== false &&
+    (metrics.lowestEpochDrawn < 0 || tile.epoch < metrics.lowestEpochDrawn)
+  ) {
     metrics.lowestEpochDrawn = tile.epoch;
   }
   if (
-    metrics.lowestContentVersion < 0 ||
-    (tile.contentVersion >= 0 &&
-      tile.contentVersion < metrics.lowestContentVersion)
+    tile.document !== false &&
+    (metrics.lowestContentVersion < 0 ||
+      (tile.contentVersion >= 0 &&
+        tile.contentVersion < metrics.lowestContentVersion))
   ) {
     metrics.lowestContentVersion = tile.contentVersion;
   }

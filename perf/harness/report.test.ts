@@ -281,6 +281,48 @@ describe("long interval floor verdicts", () => {
   });
 });
 
+describe("scenario application-task overrides", () => {
+  it("applies a scenario's application-task override", () => {
+    const scenarioRuns = [run(12)];
+    const overridden = evaluateScenario({
+      scenario: "large-edit",
+      runs: scenarioRuns,
+      budgets: {
+        ...budgets,
+        scenarioOverrides: { "large-edit": { applicationTaskMs: 16 } },
+      },
+      noiseFloor: {
+        droppedFramesPerMinute: 0,
+        partiallyPresentedFramesPerMinute: 0,
+        intervalsOver12_5MsPerMinute: 0,
+      },
+      durationMs: 5_000,
+    });
+    const withoutOverride = evaluateScenario({
+      scenario: "pan",
+      runs: scenarioRuns,
+      budgets,
+      noiseFloor: {
+        droppedFramesPerMinute: 0,
+        partiallyPresentedFramesPerMinute: 0,
+        intervalsOver12_5MsPerMinute: 0,
+      },
+      durationMs: 5_000,
+    });
+
+    expect(overridden.verdict).toBe("passed");
+    expect(overridden.violations).toEqual([]);
+    expect(withoutOverride.verdict).toBe("failed");
+    expect(withoutOverride.violations).toEqual([
+      expect.objectContaining({
+        metric: "applicationTaskMs",
+        threshold: 8,
+        actual: 12,
+      }),
+    ]);
+  });
+});
+
 describe("application task budget", () => {
   it("fails when one measured run has an application task over 8 ms", () => {
     const result = evaluateScenario({
@@ -333,6 +375,52 @@ describe("application task budget", () => {
 
     expect(result.worstRun.run).toBe(3);
     expect(result.worstRun.metrics.longIntervals).toBe(1);
+  });
+});
+
+describe("scenario floor allowances", () => {
+  it("adds a scenario's extra missed frames to the floor allowance", () => {
+    const scenarioRuns = (frames: number): ScenarioRun[] =>
+      Array.from({ length: 5 }, (_, index) =>
+        runWithFrames(frames, 0, 0, index + 1),
+      );
+    const budgetsWithExtraAllowance: BudgetConfig = {
+      ...budgets,
+      scenarioOverrides: { pan: { extraMissedFramesPerRun: 2 } },
+    };
+
+    const passing = evaluateScenario({
+      scenario: "pan",
+      runs: scenarioRuns(2),
+      budgets: budgetsWithExtraAllowance,
+      noiseFloor: {
+        droppedFramesPerMinute: 0,
+        partiallyPresentedFramesPerMinute: 0,
+        intervalsOver12_5MsPerMinute: 0,
+      },
+      durationMs: 5_000,
+    });
+    const failing = evaluateScenario({
+      scenario: "pan",
+      runs: scenarioRuns(3),
+      budgets: budgetsWithExtraAllowance,
+      noiseFloor: {
+        droppedFramesPerMinute: 0,
+        partiallyPresentedFramesPerMinute: 0,
+        intervalsOver12_5MsPerMinute: 0,
+      },
+      durationMs: 5_000,
+    });
+
+    expect(passing.verdict).toBe("passed");
+    expect(failing.verdict).toBe("failed");
+    expect(failing.floorRelativeMetrics[0]?.allowancePerRun).toBeGreaterThan(2);
+    expect(failing.violations).toEqual([
+      expect.objectContaining({
+        metric: "droppedOrPartiallyPresentedFrames",
+        actual: 3,
+      }),
+    ]);
   });
 });
 
@@ -403,6 +491,81 @@ describe("invalid metrics", () => {
 
     expect(result.verdict).toBe("invalid");
     expect(result.invalidMetrics).toContain("stage.draw.p99");
+  });
+});
+
+describe("stage sample expectations", () => {
+  it("accepts a stage run without Frame Samples when the scenario expects none", () => {
+    const result = evaluateScenario({
+      scenario: "large-edit",
+      runs: [
+        {
+          ...run(7),
+          metrics: { ...run(7).metrics, stages: {} },
+        },
+      ],
+      budgets,
+      noiseFloor: {
+        droppedFramesPerMinute: 0,
+        partiallyPresentedFramesPerMinute: 0,
+        intervalsOver12_5MsPerMinute: 0,
+      },
+      durationMs: 60_000,
+      stageTiming: true,
+      frameSamplesExpected: false,
+    });
+
+    expect(result.verdict).toBe("passed");
+    expect(result.invalidMetrics).toEqual([]);
+  });
+
+  it("still checks the application task when no Frame Sample is expected", () => {
+    const result = evaluateScenario({
+      scenario: "large-edit",
+      runs: [
+        {
+          ...run(20),
+          metrics: { ...run(20).metrics, stages: {} },
+        },
+      ],
+      budgets,
+      noiseFloor: {
+        droppedFramesPerMinute: 0,
+        partiallyPresentedFramesPerMinute: 0,
+        intervalsOver12_5MsPerMinute: 0,
+      },
+      durationMs: 60_000,
+      stageTiming: true,
+      frameSamplesExpected: false,
+    });
+
+    expect(result.verdict).toBe("failed");
+    expect(result.violations).toEqual([
+      expect.objectContaining({ metric: "applicationTaskMs" }),
+    ]);
+  });
+
+  it("marks a stage run without Frame Samples invalid when the scenario expects them", () => {
+    const result = evaluateScenario({
+      scenario: "pan",
+      runs: [
+        {
+          ...run(7),
+          metrics: { ...run(7).metrics, stages: {} },
+        },
+      ],
+      budgets,
+      noiseFloor: {
+        droppedFramesPerMinute: 0,
+        partiallyPresentedFramesPerMinute: 0,
+        intervalsOver12_5MsPerMinute: 0,
+      },
+      durationMs: 60_000,
+      stageTiming: true,
+    });
+
+    expect(result.verdict).toBe("invalid");
+    expect(result.invalidMetrics).toContain("stages");
   });
 });
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { REFERENCE_THRESHOLDS, type EnvironmentReport } from "./environment";
 import {
   collectEnvironment,
+  classifyNoiseFloor,
   evaluateNoiseFloor,
   evaluatePreflight,
   measureNoiseFloor,
@@ -180,6 +181,20 @@ describe("noise floor validity", () => {
 });
 
 describe("noise floor measurement", () => {
+  it("reports an invalid trace classification instead of a zero floor", async () => {
+    await expect(
+      classifyNoiseFloor({
+        valid: false,
+        reason: "zero-pipeline-frames",
+        detail: "blank trace",
+      }),
+    ).resolves.toEqual({
+      valid: false,
+      reason: "zero-pipeline-frames",
+      detail: "blank trace",
+    });
+  });
+
   it("runs the redraw loop through injected trace recording and classification", async () => {
     const evaluations: unknown[] = [];
     const page = {

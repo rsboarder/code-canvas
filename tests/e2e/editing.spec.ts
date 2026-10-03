@@ -2,45 +2,27 @@ import { readFile } from "node:fs/promises";
 
 import { expect, test, type Page } from "@playwright/test";
 
-import {
-  generateEdgeCaseCorpus,
-  splitSourceLines,
-} from "../../fixtures/lib/dataset";
+import { generateEdgeCaseCorpus } from "../../fixtures/lib/dataset";
 import {
   LineLayout,
   type LineMetrics,
 } from "../../src/code-view/domain/line-layout";
+import { splitSourceLines } from "../../src/shared/domain";
 import { DEFAULT_CODE_FONT } from "../../src/shared/font";
 import {
   MAX_ZOOM_STEP_LN,
   PINCH_WHEEL_DELTA_PER_LN_SCALE,
 } from "../../src/shared/pinch";
+import {
+  bodyPoint,
+  installDirectoryMock,
+  openFolder,
+  readMockFile,
+  readWidgetRects,
+} from "./support";
 
 test.describe.configure({ mode: "serial" });
 test.use({ deviceScaleFactor: 2 });
-
-async function installDirectoryMock(page: Page, text: string): Promise<void> {
-  await page.addInitScript((initialText: string) => {
-    window.name = initialText;
-    const file = {
-      kind: "file",
-      name: "widget-000.tsx",
-      getFile: () => Promise.resolve(new File([window.name], "widget-000.tsx")),
-    };
-    const directory = {
-      kind: "directory",
-      name: "workspace",
-      entries: async function* () {
-        await Promise.resolve();
-        yield ["widget-000.tsx", file];
-      },
-    };
-    Object.defineProperty(window, "showDirectoryPicker", {
-      configurable: true,
-      value: () => Promise.resolve(directory),
-    });
-  }, text);
-}
 
 interface WidgetBodyRect {
   readonly x: number;
@@ -52,7 +34,7 @@ interface WidgetBodyRect {
 async function openFile(page: Page, text: string): Promise<void> {
   await installDirectoryMock(page, text);
   await page.goto("/");
-  await page.getByTestId("open-folder").click();
+  await openFolder(page);
   await expect(page.getByTestId("canvas")).toHaveAttribute(
     "data-content-version",
     "1",
@@ -61,20 +43,6 @@ async function openFile(page: Page, text: string): Promise<void> {
     "data-highlighted",
     "true",
   );
-}
-
-async function bodyPoint(page: Page): Promise<{ x: number; y: number }> {
-  const value = await page
-    .getByTestId("canvas")
-    .getAttribute("data-widget-body-rect");
-  if (!value) throw new Error("Widget body rect is missing");
-  const rect = JSON.parse(value) as {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-  return { x: rect.x + Math.min(120, rect.width / 2), y: rect.y + 24 };
 }
 
 interface FrameLogEntry {
@@ -265,6 +233,7 @@ test("Double click on a line", async ({ page }) => {
     narrowAdvance: nextCell.x - targetCell.x,
     tabSize: DEFAULT_CODE_FONT.tabSize,
     baseline: 0,
+    lineHeight: DEFAULT_CODE_FONT.lineHeight,
     advanceFor: (cluster) => advances.get(cluster) ?? nextCell.x - targetCell.x,
   };
   const expectedColumn = new LineLayout(text, lineMetrics).columnAtX(
@@ -287,6 +256,67 @@ test("Double click on a line", async ({ page }) => {
     (await canvas.getAttribute("data-editor-position")) ?? "{}",
   ) as { readonly lineNumber?: number; readonly column?: number };
   expect(cursor).toEqual({ lineNumber: 1, column: expectedColumn });
+});
+
+test("Double click on another widget", async ({ page }) => {
+  const directoryName = await installDirectoryMock(page, [
+    { path: "a.ts", text: "const first = 1;\n" },
+    { path: "b.ts", text: "const second = 2;\n" },
+  ]);
+  await page.goto("/");
+  await openFolder(page);
+  const canvas = page.getByTestId("canvas");
+  await expect(canvas).toHaveAttribute("data-content-version", "1");
+  await expect(canvas).toHaveAttribute("data-highlighted", "true");
+
+  await canvas.dblclick({ position: await bodyPoint(page) });
+  await expect(canvas).toHaveAttribute("data-editing", "true");
+  await page.keyboard.type("x");
+
+  const rects = await readWidgetRects(page);
+  const first = rects.find((entry) => entry.filePath === "a.ts");
+  const second = rects.find((entry) => entry.filePath === "b.ts");
+  if (!first || !second)
+    throw new Error(`Widget rects: ${JSON.stringify(rects)}`);
+  const scale = 1;
+  const secondPoint = {
+    x: second.rect.x + Math.min(120, second.rect.width / 2),
+    y: second.rect.y + DEFAULT_CODE_FONT.bodyTop * scale + 24,
+  };
+  await canvas.dblclick({ position: secondPoint });
+
+  await expect
+    .poll(() => readMockFile(page, directoryName, "a.ts"), { timeout: 10_000 })
+    .toContain("x");
+  await expect(canvas).toHaveAttribute("data-content-version", "2");
+  await expect
+    .poll(() => page.locator(".monaco-editor .view-line").first().textContent())
+    .toContain("second");
+  await expect(canvas).toHaveAttribute("data-editing", "true");
+
+  const editorBox = await page.getByTestId("editor").boundingBox();
+  if (!editorBox) throw new Error("Editor bounding box is missing");
+  const expectedBox = {
+    x: second.rect.x,
+    y: second.rect.y + DEFAULT_CODE_FONT.bodyTop * scale,
+    width: second.rect.width,
+    height: second.rect.height - DEFAULT_CODE_FONT.bodyTop * scale,
+  };
+  const boxMessage = `editor=${JSON.stringify(editorBox)} second=${JSON.stringify(second.rect)}`;
+  expect(Math.abs(editorBox.x - expectedBox.x), boxMessage).toBeLessThanOrEqual(
+    1,
+  );
+  expect(Math.abs(editorBox.y - expectedBox.y), boxMessage).toBeLessThanOrEqual(
+    1,
+  );
+  expect(
+    Math.abs(editorBox.width - expectedBox.width),
+    boxMessage,
+  ).toBeLessThanOrEqual(1);
+  expect(
+    Math.abs(editorBox.height - expectedBox.height),
+    boxMessage,
+  ).toBeLessThanOrEqual(1);
 });
 
 interface TextMetricsResult {
@@ -665,7 +695,7 @@ test("Pan during editing", async ({ page }) => {
     .getByTestId("canvas")
     .getAttribute("data-widget-body-rect");
   const value = JSON.parse(before ?? "{}") as WidgetBodyRect;
-  await page.mouse.move(value.x + 10, value.y - 20);
+  await page.mouse.move(value.x - 10, value.y + 20);
   await page.mouse.down();
   await page.mouse.move(value.x + 90, value.y - 20);
   await page.mouse.up();
@@ -690,13 +720,7 @@ test.describe("Highlighting after an edit", () => {
     );
   });
 
-  // The whole-file slice tokenizer re-tokenizes the whole file on every
-  // Content Version.
-  // It measured 348 ms from exit to highlighted for this case; task 8.3's
-  // incremental tokenizer is expected to meet the bound. Remove test.fail()
-  // when this test passes.
   test("2000-line file", async ({ page }) => {
-    test.fail();
     const text = await readFile(
       "fixtures/reference-dataset/group-00/widget-000.tsx",
       "utf8",

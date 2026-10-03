@@ -40,6 +40,56 @@ const scenario: Scenario = {
   durationMs: 300,
 };
 
+const expectedEditingInput = [
+  {
+    method: "Runtime.evaluate",
+    params: {
+      expression: `(() => {
+  const target = document.activeElement;
+  if (!(target instanceof HTMLElement)) throw new Error("no focused element to paste into");
+  const data = new DataTransfer();
+  data.setData("text/plain", "pasted");
+  target.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+})()`,
+    },
+  },
+  {
+    method: "Input.dispatchKeyEvent",
+    params: {
+      type: "rawKeyDown",
+      key: "z",
+      code: "KeyZ",
+      windowsVirtualKeyCode: 90,
+      modifiers: 4,
+    },
+  },
+  {
+    method: "Input.dispatchKeyEvent",
+    params: {
+      type: "keyUp",
+      key: "z",
+      code: "KeyZ",
+      windowsVirtualKeyCode: 90,
+      modifiers: 4,
+    },
+  },
+];
+
+function planEditingInput(): readonly DriverEvent[] {
+  return planEvents(
+    {
+      name: "Typing",
+      setup: { dataset: "reference" },
+      steps: [
+        { kind: "paste", text: "pasted" },
+        { kind: "key", key: "z", code: "KeyZ", keyCode: 90, modifiers: 4 },
+      ],
+      durationMs: 1,
+    },
+    120,
+  );
+}
+
 describe("gesture plan", () => {
   it("produces a byte-identical deterministic plan with frame-rate cadence", () => {
     const first: readonly DriverEvent[] = planEvents(scenario, 120);
@@ -75,6 +125,85 @@ describe("gesture plan", () => {
           typeof event.params.deltaY === "number",
       ),
     ).toBe(true);
+  });
+});
+
+describe("editing input plan", () => {
+  it("plans paste and shortcut steps as exact CDP input events", () => {
+    const events = planEditingInput();
+
+    expect(events).toHaveLength(3);
+    expect(events.every((event) => event.atMs === 0)).toBe(true);
+    expect(events.map(({ method, params }) => ({ method, params }))).toEqual(
+      expectedEditingInput,
+    );
+  });
+
+  it("plans a double click as two press and release pairs", () => {
+    const events = planEvents(
+      {
+        name: "Typing",
+        setup: { dataset: "reference" },
+        steps: [{ kind: "dblclick", x: 1000, y: 300 }],
+        durationMs: 1,
+      },
+      120,
+    );
+
+    expect(events).toEqual([
+      {
+        atMs: 0,
+        stepKind: "dblclick",
+        method: "Input.dispatchMouseEvent",
+        params: {
+          type: "mousePressed",
+          x: 1000,
+          y: 300,
+          button: "left",
+          buttons: 1,
+          clickCount: 1,
+        },
+      },
+      {
+        atMs: 0,
+        stepKind: "dblclick",
+        method: "Input.dispatchMouseEvent",
+        params: {
+          type: "mouseReleased",
+          x: 1000,
+          y: 300,
+          button: "left",
+          buttons: 0,
+          clickCount: 1,
+        },
+      },
+      {
+        atMs: 0,
+        stepKind: "dblclick",
+        method: "Input.dispatchMouseEvent",
+        params: {
+          type: "mousePressed",
+          x: 1000,
+          y: 300,
+          button: "left",
+          buttons: 1,
+          clickCount: 2,
+        },
+      },
+      {
+        atMs: 0,
+        stepKind: "dblclick",
+        method: "Input.dispatchMouseEvent",
+        params: {
+          type: "mouseReleased",
+          x: 1000,
+          y: 300,
+          button: "left",
+          buttons: 0,
+          clickCount: 2,
+        },
+      },
+    ]);
   });
 });
 
@@ -220,6 +349,28 @@ describe("gesture ack failures", () => {
     await expect(
       runEvents(cdp as unknown as CDPSession, events, clock),
     ).rejects.toThrow("boom");
+  });
+
+  it("rejects the run when Runtime.evaluate reports an exception", async () => {
+    const clock: DriverClock = {
+      now: () => 0,
+      sleep: () => Promise.resolve(),
+    };
+    const cdp = {
+      send: () => Promise.resolve({ exceptionDetails: { text: "boom" } }),
+    };
+    const events: DriverEvent[] = [
+      {
+        atMs: 0,
+        stepKind: "paste",
+        method: "Runtime.evaluate",
+        params: {},
+      },
+    ];
+
+    await expect(
+      runEvents(cdp as unknown as CDPSession, events, clock),
+    ).rejects.toThrow("Runtime.evaluate");
   });
 
   it("fails the run when an ack never resolves within the cap", async () => {

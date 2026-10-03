@@ -5,8 +5,8 @@ import {
 import type { IGrammar, StateStack } from "vscode-textmate";
 
 import { createTextMateRuntime, metadataForeground } from "./textmate";
-import { buildMonacoThemeRules, monacoTokenName } from "./theme-rules";
-import { themePalette } from "./theme";
+import { monacoTokenName } from "./theme-rules";
+import { monacoTheme } from "./theme";
 
 class TextMateState implements languages.IState {
   constructor(readonly stack: StateStack | null) {}
@@ -29,15 +29,7 @@ export async function configureMonacoTextMate(): Promise<
   readonly { dispose(): void }[]
 > {
   const runtime = await createTextMateRuntime();
-  monacoEditor.defineTheme("code-canvas-dark", {
-    base: "vs-dark",
-    inherit: false,
-    rules: buildMonacoThemeRules(runtime.colorMap),
-    colors: {
-      "editor.background": themePalette.background,
-      "editor.foreground": themePalette.foreground,
-    },
-  });
+  monacoEditor.defineTheme("code-canvas-dark", monacoTheme);
   monacoEditor.setTheme("code-canvas-dark");
   languages.register({ id: "typescriptreact" });
   languages.register({ id: "typescript" });

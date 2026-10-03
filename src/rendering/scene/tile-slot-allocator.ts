@@ -20,15 +20,36 @@ export class TileSlotAllocator {
   };
   private tick = 0;
 
-  constructor(readonly capacity: number) {
+  private capacityValue: number;
+
+  constructor(capacity: number) {
     if (!Number.isInteger(capacity) || capacity < 1) {
       throw new RangeError(
         "TileSlotAllocator capacity must be a positive integer",
       );
     }
+    this.capacityValue = capacity;
     this.slotKey = new Array<string | undefined>(capacity).fill(undefined);
     this.slotPinned = new Array<boolean>(capacity).fill(false);
     this.slotLastUsed = new Array<number>(capacity).fill(0);
+  }
+
+  get capacity(): number {
+    return this.capacityValue;
+  }
+
+  grow(newCapacity: number): void {
+    if (newCapacity <= this.capacityValue) return;
+    if (!Number.isInteger(newCapacity)) {
+      throw new RangeError(
+        "TileSlotAllocator capacity must be a positive integer",
+      );
+    }
+    const added = newCapacity - this.capacityValue;
+    this.slotKey.push(...new Array<string | undefined>(added).fill(undefined));
+    this.slotPinned.push(...new Array<boolean>(added).fill(false));
+    this.slotLastUsed.push(...new Array<number>(added).fill(0));
+    this.capacityValue = newCapacity;
   }
 
   slotFor(key: string): number | undefined {
@@ -38,6 +59,14 @@ export class TileSlotAllocator {
   isPinned(key: string): boolean {
     const slot = this.keyToSlot.get(key);
     return slot === undefined ? false : (this.slotPinned[slot] ?? false);
+  }
+
+  pinnedCount(): number {
+    let count = 0;
+    for (let slot = 0; slot < this.capacity; slot += 1) {
+      if (this.slotKey[slot] !== undefined && this.slotPinned[slot]) count += 1;
+    }
+    return count;
   }
 
   touch(key: string): void {

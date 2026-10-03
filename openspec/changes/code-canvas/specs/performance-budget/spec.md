@@ -25,6 +25,8 @@ During each of the interactions — pan, zoom (including detail-level transition
 - the number of intervals between presented frames longer than 12.5 ms (1.5 frame periods at 120 Hz) does not exceed the noise floor scaled to the same duration;
 - no main-thread task caused by the application code or its libraries (including the editor) lasts longer than 8 ms; browser tasks not caused by application code are excluded from this criterion but are reflected in the report.
 
+An edit in the editor that replaces most of its visible lines at once — a paste, undo or redo of hundreds of lines — MAY take one main-thread task of up to 16 ms and miss one frame (user's decision, 2026-10-03). Typing and switching the editor between files stay within the limits above.
+
 #### Scenario: Pan across the whole canvas at zoom 1.0
 - **WHEN** a trace is recorded in the reference environment during a continuous pan across the entire grid of 200 widgets at zoom 1.0
 - **THEN** the trace contains no dropped or partially presented frames
@@ -42,8 +44,12 @@ During each of the interactions — pan, zoom (including detail-level transition
 - **THEN** the trace contains no dropped frames
 
 #### Scenario: Typing
-- **WHEN** a trace is recorded while typing in the editor of a 2000-line file
+- **WHEN** a trace is recorded while typing in the editor of a 2000-line file and switching the editor to another file and back
 - **THEN** the trace contains no dropped frames
+
+#### Scenario: Large edit in the editor
+- **WHEN** a trace is recorded while 500 lines are pasted into the editor of a 2000-line file and the paste is undone
+- **THEN** no main-thread task lasts longer than 16 ms, and each of the two edits misses at most one frame
 
 ### Requirement: Noise floor
 The noise floor SHALL be measured in the reference environment using the same trace-recording method, on a blank page with a continuous unloaded `requestAnimationFrame` loop, for the same duration as the scenarios, and expressed as the number of Dropped and Partially presented frames and intervals longer than 12.5 ms per minute. Because these are rare random events, a floor of zero over a minute does not mean a zero rate: a trace is compared against the one-sided 95% Poisson upper bound of the floor's rate, and the harness judges a scenario across its repeated runs (spec `performance-harness`). The floor measurement SHALL be repeated on every budget check and stored together with the results.

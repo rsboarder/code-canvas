@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Camera, DetailLevel } from "../board/index";
-import {
-  DocumentResidency,
-  LineLayout,
-  type GpuUploader,
-  type TokenizedLines,
-  type Tokenizer,
-} from "../code-view/index";
+import { LineLayout } from "../code-view/index";
 import { splitSourceLines } from "../shared/domain/line-splitting";
 
 describe("vertical slice domain policies", () => {
@@ -47,43 +41,11 @@ describe("vertical slice domain policies", () => {
       narrowAdvance: 7.5,
       tabSize: 4,
       baseline: 14,
+      lineHeight: 20,
       advanceFor: (cluster) => advances.get(cluster) ?? 7.5,
     });
     expect(layout.cells(0).map((cell) => cell.x)).toEqual([
       0, 7.5, 30, 42.75, 61,
     ]);
-  });
-
-  it("does not upload a stale Content Version", () => {
-    const tokenizer: Tokenizer = {
-      contentChanged: () => undefined,
-      wanted: () => undefined,
-    };
-    const uploaded: TokenizedLines[] = [];
-    const uploader: GpuUploader = {
-      uploadTokens: (value) => {
-        uploaded.push(value);
-      },
-    };
-    const residency = new DocumentResidency(tokenizer);
-    residency.contentChanged("file", 2, "new");
-    residency.receiveTokens({
-      fileId: "file",
-      contentVersion: 1,
-      lineRange: { start: 0, end: 1 },
-      runs: new Uint32Array(),
-      lineRunOffsets: new Uint32Array(),
-      palette: [],
-    });
-    residency.receiveTokens({
-      fileId: "file",
-      contentVersion: 2,
-      lineRange: { start: 0, end: 1 },
-      runs: new Uint32Array(),
-      lineRunOffsets: new Uint32Array(),
-      palette: [],
-    });
-    residency.drain(10, uploader);
-    expect(uploaded.map((value) => value.contentVersion)).toEqual([2]);
   });
 });

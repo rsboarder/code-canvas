@@ -4,6 +4,7 @@ import {
   MAX_ZOOM_STEP_LN,
   PINCH_WHEEL_DELTA_PER_LN_SCALE,
 } from "../../src/shared/pinch";
+import { installDirectoryMock, openFolder } from "./support";
 
 test.use({ deviceScaleFactor: 2 });
 
@@ -18,31 +19,6 @@ const SAMPLE_TEXT = `export function widget(value: number): number {
   return scaled + 1;
 }
 `;
-
-async function installDirectoryMock(page: Page, text: string): Promise<void> {
-  await page.addInitScript((fileText: string) => {
-    const file = {
-      kind: "file",
-      name: "widget-000.tsx",
-      getFile: () =>
-        Promise.resolve(
-          new File([fileText], "widget-000.tsx", { type: "text/plain" }),
-        ),
-    };
-    const directory = {
-      kind: "directory",
-      name: "workspace",
-      entries: async function* () {
-        await Promise.resolve();
-        yield ["widget-000.tsx", file];
-      },
-    };
-    Object.defineProperty(window, "showDirectoryPicker", {
-      configurable: true,
-      value: () => Promise.resolve(directory),
-    });
-  }, text);
-}
 
 interface TileDebugSnapshot {
   readonly rasterScales: readonly number[];
@@ -173,7 +149,7 @@ async function captureFirstLineCrop(
 test("Text is re-rasterized at the settled zoom", async ({ page }) => {
   await installDirectoryMock(page, SAMPLE_TEXT);
   await page.goto("/");
-  await page.getByTestId("open-folder").click();
+  await openFolder(page);
   await expect(page.getByTestId("canvas")).toHaveAttribute(
     "data-highlighted",
     "true",
@@ -232,7 +208,7 @@ test("Zoom out from 4.0 keeps text on screen", async ({ page }) => {
   page.on("pageerror", (error) => pageErrors.push(error));
   await installDirectoryMock(page, SAMPLE_TEXT);
   await page.goto("/");
-  await page.getByTestId("open-folder").click();
+  await openFolder(page);
   await expect(page.getByTestId("canvas")).toHaveAttribute(
     "data-highlighted",
     "true",
@@ -250,7 +226,7 @@ test("Zoom out from 4.0 keeps text on screen", async ({ page }) => {
 test("Highlighting arrives without an empty frame", async ({ page }) => {
   await installDirectoryMock(page, SAMPLE_TEXT);
   await page.goto("/");
-  await page.getByTestId("open-folder").click();
+  await openFolder(page);
   await expect
     .poll(async () =>
       (await readFrameLog(page)).some(

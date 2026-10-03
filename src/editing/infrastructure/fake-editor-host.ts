@@ -3,18 +3,19 @@ import { splitSourceLines } from "../../shared/domain/line-splitting";
 import type {
   EditorCursor,
   EditorHost,
+  EditorPrepareOptions,
   EditorOpenOptions,
 } from "../application/editor-host";
 
 export class FakeEditorHost implements EditorHost {
   private currentValue = "";
-  private openedValue = "";
-  private changedSinceOpen = false;
   visible = false;
   openCount = 0;
   closeCount = 0;
+  preparedCount = 0;
   isOpen = false;
   readOnly = false;
+  lastPrepared: EditorPrepareOptions | undefined;
   lastOptions: EditorOpenOptions | undefined;
   lastBounds: Rect | undefined;
   lastZoom = 1;
@@ -30,13 +31,16 @@ export class FakeEditorHost implements EditorHost {
 
   set value(value: string) {
     this.currentValue = value;
-    this.changedSinceOpen = value !== this.openedValue;
+  }
+
+  prepare(options: EditorPrepareOptions): Promise<void> {
+    this.preparedCount += 1;
+    this.lastPrepared = options;
+    return Promise.resolve();
   }
 
   open(options: EditorOpenOptions): void {
     this.currentValue = options.text;
-    this.openedValue = options.text;
-    this.changedSinceOpen = false;
     this.lastOptions = options;
     this.lastCursor = options.cursor;
     this.openCount += 1;
@@ -72,10 +76,6 @@ export class FakeEditorHost implements EditorHost {
 
   getValue(): string {
     return this.currentValue;
-  }
-
-  hasContentChanged(): boolean {
-    return this.changedSinceOpen;
   }
 
   getLineCount(): number {

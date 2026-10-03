@@ -24,6 +24,7 @@ describe("performance budget scenario coverage", () => {
       "Worst-case text density",
       "Drag, resize and scroll inside a widget",
       "Typing",
+      "Large edit in the editor",
       "Pan during initial load",
     ]);
   });

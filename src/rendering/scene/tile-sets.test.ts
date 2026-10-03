@@ -152,6 +152,67 @@ describe("TileSetPlanner", () => {
   });
 });
 
+describe("TileSetPlanner empty content", () => {
+  it("requests headers but no content for an empty Text document", () => {
+    const { planner } = plannerWith(1, 1);
+    buildPlanner(planner, {
+      ...COMMON,
+      contentWidth: 0,
+      contentHeight: 0,
+      gestureActive: false,
+      recordCount: 0,
+    });
+
+    expect(planner.requestHeaderCount).toBeGreaterThan(0);
+    expect(planner.requestLabel).toBe(false);
+    expect(planner.requestCount).toBe(0);
+    expect(planner.missingTile).toBe(false);
+  });
+
+  it("requests headers and labels for an empty Minimap document", () => {
+    const { planner } = plannerWith(1, 1);
+    planner.setMinimapActive(true);
+    buildPlanner(planner, {
+      ...COMMON,
+      contentWidth: 0,
+      contentHeight: 0,
+      gestureActive: false,
+      recordCount: 0,
+    });
+
+    expect(planner.requestHeaderCount).toBeGreaterThan(0);
+    expect(planner.requestLabel).toBe(true);
+  });
+
+  it("draws resident headers and labels for an empty document", () => {
+    const view = records(4);
+    view.active[0] = 1;
+    view.ready[0] = 1;
+    view.kind[0] = 1;
+    view.rasterScale[0] = 1;
+    view.width[0] = 512;
+    view.height[0] = 42;
+    view.active[1] = 1;
+    view.ready[1] = 1;
+    view.kind[1] = 2;
+    view.rasterScale[1] = 1;
+    view.width[1] = 120;
+    view.height[1] = 18;
+    const planner = new TileSetPlanner(view, 4);
+    planner.setHeaderHeight(42);
+    buildPlanner(planner, {
+      ...COMMON,
+      contentWidth: 0,
+      contentHeight: 0,
+      gestureActive: false,
+      recordCount: 2,
+    });
+
+    expect(planner.drawHeaderCurrentCount).toBeGreaterThanOrEqual(1);
+    expect(planner.drawLabelCurrentCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe("TileSetPlanner label draw set", () => {
   it("keeps a resident label tile when the content epoch changes", () => {
     const view = records(4);
@@ -494,16 +555,20 @@ describe("TileSetPlanner prefetch", () => {
 
 describe("TileSetPlanner threshold prefetch", () => {
   it("keeps the focus fixed for a threshold view and uses its raster scale", () => {
-    const bounds = viewBoundsAtZoom({
-      cameraOffsetX: -120,
-      cameraOffsetY: -80,
-      currentZoom: 0.4,
-      targetZoom: 0.55,
-      focusX: 400,
-      focusY: 300,
-      viewportWidth: 800,
-      viewportHeight: 600,
-    });
+    const bounds = { left: 0, top: 0, right: 0, bottom: 0 };
+    viewBoundsAtZoom(
+      {
+        cameraOffsetX: -120,
+        cameraOffsetY: -80,
+        currentZoom: 0.4,
+        targetZoom: 0.55,
+        focusX: 400,
+        focusY: 300,
+        viewportWidth: 800,
+        viewportHeight: 600,
+      },
+      bounds,
+    );
     const focusWorldX = (400 + 120) / 0.4;
     const focusWorldY = (300 + 80) / 0.4;
     expect(bounds.left + 400 / 0.55).toBeCloseTo(focusWorldX);

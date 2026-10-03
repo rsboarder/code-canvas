@@ -7,6 +7,7 @@ import EditorWorker from "monaco-editor/editor/editor.worker.js?worker";
 import type {
   EditorCursor,
   EditorHost,
+  EditorPrepareOptions,
   EditorOpenOptions,
 } from "../application/editor-host";
 import type { FontDefinition } from "../../shared/font";
@@ -15,6 +16,54 @@ import { ModelBookkeeping } from "./model-bookkeeping";
 
 interface EditorTheme {
   readonly background: string;
+}
+
+function editorOptions(
+  font: FontDefinition,
+): monacoEditor.IStandaloneEditorConstructionOptions {
+  return {
+    automaticLayout: false,
+    model: null,
+    fontFamily: font.family,
+    fontSize: font.size,
+    lineHeight: font.lineHeight,
+    fontLigatures: false,
+    letterSpacing: font.letterSpacing,
+    disableMonospaceOptimizations: true,
+    minimap: { enabled: false },
+    overviewRulerLanes: 0,
+    wordWrap: "off",
+    codeLens: false,
+    lineNumbers: "off",
+    glyphMargin: false,
+    folding: false,
+    lineDecorationsWidth: 0,
+    lineNumbersMinChars: 0,
+    guides: {
+      indentation: false,
+      bracketPairs: false,
+      highlightActiveIndentation: false,
+    },
+    renderLineHighlight: "none",
+    padding: { top: 0, bottom: 0 },
+    renderValidationDecorations: "off",
+    // Off: decorations the GPU view does not draw (D9 minimal configuration).
+    bracketPairColorization: { enabled: false },
+    matchBrackets: "never",
+    occurrencesHighlight: "off",
+    selectionHighlight: false,
+    renderWhitespace: "none",
+    unicodeHighlight: {
+      ambiguousCharacters: false,
+      invisibleCharacters: false,
+      nonBasicASCII: false,
+    },
+    links: false,
+    colorDecorators: false,
+    stickyScroll: { enabled: false },
+    contextmenu: true,
+    scrollbar: { verticalScrollbarSize: 12, horizontalScrollbarSize: 12 },
+  };
 }
 
 export async function createMonacoEditorHost(
@@ -35,7 +84,13 @@ class MonacoEditorHost implements EditorHost {
   private readonly models: ModelBookkeeping<monacoEditor.ITextModel>;
   private readonly disposables: { dispose(): void }[] = [];
   private modelDisposable: { dispose(): void } | undefined;
-  private openedAlternativeVersionId: number | undefined;
+  private preparedModel:
+    | {
+        readonly model: monacoEditor.ITextModel;
+        readonly text: string;
+        readonly language: EditorPrepareOptions["language"];
+      }
+    | undefined;
 
   constructor(
     private readonly container: HTMLElement,
@@ -66,35 +121,7 @@ class MonacoEditorHost implements EditorHost {
     globalWindow.MonacoEnvironment = {
       getWorker: () => new EditorWorker(),
     };
-    this.editor = monacoEditor.create(this.container, {
-      automaticLayout: false,
-      model: null,
-      fontFamily: font.family,
-      fontSize: font.size,
-      lineHeight: font.lineHeight,
-      fontLigatures: false,
-      letterSpacing: font.letterSpacing,
-      disableMonospaceOptimizations: true,
-      minimap: { enabled: false },
-      overviewRulerLanes: 0,
-      wordWrap: "off",
-      codeLens: false,
-      lineNumbers: "off",
-      glyphMargin: false,
-      folding: false,
-      lineDecorationsWidth: 0,
-      lineNumbersMinChars: 0,
-      guides: {
-        indentation: false,
-        bracketPairs: false,
-        highlightActiveIndentation: false,
-      },
-      renderLineHighlight: "none",
-      padding: { top: 0, bottom: 0 },
-      renderValidationDecorations: "off",
-      contextmenu: true,
-      scrollbar: { verticalScrollbarSize: 12, horizontalScrollbarSize: 12 },
-    });
+    this.editor = monacoEditor.create(this.container, editorOptions(font));
     this.models = new ModelBookkeeping(this.editor);
     this.editor.addCommand(
       KeyCode.Escape,
@@ -111,12 +138,45 @@ class MonacoEditorHost implements EditorHost {
     this.disposables.push(...(await this.configureTokens()));
   }
 
+  prepare(options: EditorPrepareOptions): Promise<void> {
+    const preparedModel = this.preparedModel;
+    this.preparedModel = undefined;
+    preparedModel?.model.dispose();
+    const model = monacoEditor.createModel(options.text, options.language);
+    model.updateOptions({
+      tabSize: this.font.tabSize,
+      indentSize: this.font.tabSize,
+    });
+    this.preparedModel = {
+      model,
+      text: options.text,
+      language: options.language,
+    };
+    return new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+
   open(options: EditorOpenOptions): void {
     this.modelDisposable?.dispose();
     this.modelDisposable = undefined;
-    const model = monacoEditor.createModel(options.text, options.language);
+    const preparedModel = this.preparedModel;
+    this.preparedModel = undefined;
+    let model: monacoEditor.ITextModel;
+    if (
+      preparedModel?.text === options.text &&
+      preparedModel.language === options.language
+    ) {
+      model = preparedModel.model;
+    } else {
+      preparedModel?.model.dispose();
+      model = monacoEditor.createModel(options.text, options.language);
+      model.updateOptions({
+        tabSize: this.font.tabSize,
+        indentSize: this.font.tabSize,
+      });
+    }
     this.models.replace(model);
-    this.openedAlternativeVersionId = model.getAlternativeVersionId();
     this.editor.updateOptions({
       fontSize: this.font.size,
       lineHeight: this.font.lineHeight,
@@ -124,7 +184,6 @@ class MonacoEditorHost implements EditorHost {
       letterSpacing: 0,
       readOnly: false,
     });
-    this.editor.layout();
     this.editor.setPosition(options.cursor);
     this.modelDisposable = model.onDidChangeContent(() => {
       this.listeners.forEach((listener) => {
@@ -136,7 +195,8 @@ class MonacoEditorHost implements EditorHost {
   close(): void {
     this.modelDisposable?.dispose();
     this.modelDisposable = undefined;
-    this.openedAlternativeVersionId = undefined;
+    this.preparedModel?.model.dispose();
+    this.preparedModel = undefined;
     this.models.close();
   }
 
@@ -156,10 +216,14 @@ class MonacoEditorHost implements EditorHost {
     this.container.style.width = `${String(Math.max(1, bounds.width))}px`;
     this.container.style.height = `${String(Math.max(1, bounds.height))}px`;
     this.container.style.transform = `scale(${String(zoom)})`;
-    this.editor.layout({
-      width: Math.max(1, bounds.width),
-      height: Math.max(1, bounds.height),
-    });
+    // Postpone rendering to one render per frame; synchronous rendering exceeded the 8 ms model-switch budget.
+    this.editor.layout(
+      {
+        width: Math.max(1, bounds.width),
+        height: Math.max(1, bounds.height),
+      },
+      true,
+    );
   }
 
   setPosition(cursor: EditorCursor): void {
@@ -174,15 +238,6 @@ class MonacoEditorHost implements EditorHost {
 
   getValue(): string {
     return this.models.activeModel?.getValue() ?? "";
-  }
-
-  hasContentChanged(): boolean {
-    const model = this.models.activeModel;
-    return (
-      model !== undefined &&
-      this.openedAlternativeVersionId !== undefined &&
-      model.getAlternativeVersionId() !== this.openedAlternativeVersionId
-    );
   }
 
   getLineCount(): number {

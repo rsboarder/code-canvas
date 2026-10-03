@@ -75,9 +75,10 @@ export interface FrameCounts {
 
 export interface TraceMetrics {
   readonly valid: true;
-  readonly frameSource: "PipelineReporter";
+  readonly frameSource: "PipelineReporter" | "DevToolsFrameModel";
   readonly frames: FrameCounts;
   readonly traceFrames: FrameCounts;
+  readonly pipelineFrames?: FrameCounts;
   readonly intervalsMs: IntervalStatistics;
   readonly intervalsOver12_5Ms: Statistic;
   readonly mainThreadTasks: number;
@@ -110,7 +111,12 @@ export interface InvalidMeasurement {
     | "trace-parse-failed"
     | "zero-main-thread-tasks"
     | "zero-pipeline-frames"
+    | "zero-frame-model-frames"
     | "app-bridge-missing"
+    | "app-not-settled"
+    | "editing-unavailable"
+    | "reference-files-missing"
+    | "load-finished-before-gesture"
     | "gesture-dispatch-failed"
     | "gesture-wall-time-exceeded"
     | "camera-mismatch"
@@ -177,7 +183,8 @@ export async function classifyTrace(
   events: TraceEvents,
   options: TraceClassifierOptions = {},
 ): Promise<TraceClassification> {
-  if (!(await parseTrace(events))) return invalid("trace-parse-failed");
+  const parsedTrace = await parseTrace(events);
+  if (!parsedTrace) return invalid("trace-parse-failed");
 
   const mainThread = rendererMainThread(events);
   const taskMetrics = classifyMainThreadTasks(
@@ -192,14 +199,22 @@ export async function classifyTrace(
   const frames = pipelineFrames(events);
   if (frames.length === 0) return invalid("zero-pipeline-frames");
 
+  const modelFrames = parsedTrace.data.Frames.frames;
+  if (modelFrames.length === 0) return invalid("zero-frame-model-frames");
+
   const framesInWindow = framesWithinInteractionWindow(events, frames);
+  const modelFramesInWindow = framesWithinInteractionWindow(
+    events,
+    modelFrames,
+  );
   const intervals = presentedIntervalsMs(framesInWindow);
   const bridge = options.bridgeMetrics ?? unavailableBridgeMetrics();
   return {
     valid: true,
-    frameSource: "PipelineReporter",
-    frames: frameCounts(framesInWindow),
-    traceFrames: frameCounts(frames),
+    frameSource: "DevToolsFrameModel",
+    frames: frameModelCounts(modelFramesInWindow),
+    traceFrames: frameModelCounts(modelFrames),
+    pipelineFrames: frameCounts(framesInWindow),
     intervalsMs: intervalStatistics(intervals),
     intervalsOver12_5Ms: countLongIntervals(intervals, 12.5),
     mainThreadTasks: taskMetrics.tasks.length,
@@ -216,13 +231,15 @@ export async function classifyTrace(
   };
 }
 
-async function parseTrace(events: TraceEvents): Promise<boolean> {
+async function parseTrace(
+  events: TraceEvents,
+): Promise<TraceModel.ParsedTrace | null> {
   try {
     const model = TraceModel.Model.createWithAllHandlers();
     await model.parse(events as unknown as Types.Events.Event[]);
-    return model.parsedTrace() !== null;
+    return model.parsedTrace();
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -248,15 +265,22 @@ interface InteractionWindow {
   readonly endTs: number;
 }
 
-function framesWithinInteractionWindow(
-  events: TraceEvents,
-  frames: readonly TraceEvent[],
-): readonly TraceEvent[] {
+function framesWithinInteractionWindow<
+  T extends TraceEvent | Types.Events.LegacyTimelineFrame,
+>(events: TraceEvents, frames: readonly T[]): readonly T[] {
   const window = interactionWindow(events);
   if (!window) return frames;
   return frames.filter(
-    (frame) => frame.ts >= window.startTs && frame.ts <= window.endTs,
+    (frame) =>
+      getFrameStartTime(frame) >= window.startTs &&
+      getFrameStartTime(frame) <= window.endTs,
   );
+}
+
+function getFrameStartTime(
+  frame: TraceEvent | Types.Events.LegacyTimelineFrame,
+): number {
+  return "startTime" in frame ? frame.startTime : frame.ts;
 }
 
 function interactionWindow(events: TraceEvents): InteractionWindow | undefined {
@@ -304,6 +328,34 @@ function frameCounts(frames: readonly TraceEvent[]): TraceMetrics["frames"] {
   };
 }
 
+function frameModelCounts(
+  frames: readonly Types.Events.LegacyTimelineFrame[],
+): FrameCounts {
+  const counts = {
+    total: frames.length,
+    presented: 0,
+    partiallyPresented: 0,
+    dropped: 0,
+    idle: 0,
+  };
+  for (const frame of frames) {
+    if (frame.isPartial) {
+      counts.partiallyPresented += 1;
+      continue;
+    }
+    if (frame.dropped) {
+      counts.dropped += 1;
+      continue;
+    }
+    if (frame.idle) {
+      counts.idle += 1;
+      continue;
+    }
+    counts.presented += 1;
+  }
+  return counts;
+}
+
 function presentedIntervalsMs(frames: readonly TraceEvent[]): number[] {
   // Match spike C: only STATE_PRESENTED_ALL timestamps define presentation
   // intervals, so idle/no-damage pipeline records never become frame gaps.
@@ -314,9 +366,25 @@ function presentedIntervalsMs(frames: readonly TraceEvent[]): number[] {
   for (let index = 1; index < presented.length; index += 1) {
     const previous = presented[index - 1];
     const current = presented[index];
-    if (previous && current) intervals.push((current.ts - previous.ts) / 1_000);
+    if (!previous || !current) continue;
+    if (isIdleGap(frames, previous.ts, current.ts)) continue;
+    intervals.push((current.ts - previous.ts) / 1_000);
   }
   return intervals;
+}
+
+function isIdleGap(
+  frames: readonly TraceEvent[],
+  startTs: number,
+  endTs: number,
+): boolean {
+  let hasIdleFrame = false;
+  for (const frame of frames) {
+    if (frame.ts <= startTs || frame.ts >= endTs) continue;
+    if (frameState(frame) !== "STATE_NO_UPDATE_DESIRED") return false;
+    hasIdleFrame = true;
+  }
+  return hasIdleFrame;
 }
 
 function intervalStatistics(values: readonly number[]): IntervalStatistics {

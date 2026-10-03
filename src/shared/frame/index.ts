@@ -1,1 +1,6 @@
-export type { FrameSample, FrameSampleSink, FrameStageTiming } from "./types";
+export type {
+  FrameSample,
+  FrameSampleSink,
+  FrameStage,
+  FrameStageTiming,
+} from "./types";

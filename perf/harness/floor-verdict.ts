@@ -12,9 +12,11 @@ export function evaluateFloorMetric(
   values: readonly number[],
   floorPerMinute: number,
   durationMs: number,
+  extraAllowancePerRun = 0,
 ): FloorMetricVerdict {
   const allowancePerRun =
-    poissonUpperBoundPerMinute(floorPerMinute, 1) * (durationMs / 60_000);
+    poissonUpperBoundPerMinute(floorPerMinute, 1) * (durationMs / 60_000) +
+    extraAllowancePerRun;
   const runsOverAllowance = values.filter(
     (value) => value > allowancePerRun,
   ).length;

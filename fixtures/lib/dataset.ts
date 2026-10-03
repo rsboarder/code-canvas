@@ -1,6 +1,8 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import { splitSourceLines } from "../../src/shared/domain";
+
 export const FILE_COUNT = 200;
 export const LINE_COUNT = 2000;
 export const MAX_LINE_LENGTH = 300;
@@ -642,13 +644,35 @@ export const EDGE_CASE_FILES: readonly EdgeCaseFile[] = [
     hasTrailingNewline: true,
     tabColumns: [0, 1, 2, 3, 4, 5, 6, 7],
   }),
-];
-
-/** Reference implementation of LineLayout's line-splitting rule. */
-export function splitSourceLines(text: string): readonly string[] {
-  const withoutBom = text.replace(/^\uFEFF/u, "");
-  return withoutBom.split(/\r\n|\r|\n/u);
+  edgeCaseFile(
+    "tabs-after-wide.ts",
+    `function wide() {
+  const cjk = "界\tx";
+  const emoji = "😀\tx";
+  return [cjk, emoji];
 }
+`,
+    {
+      lineCount: 6,
+      lines: [
+        "function wide() {",
+        '  const cjk = "界\tx";',
+        '  const emoji = "😀\tx";',
+        "  return [cjk, emoji];",
+        "}",
+        "",
+      ],
+      hasBom: false,
+      longestLineCodePoints: 22,
+      lineEnding: "lf",
+      hasBlankLine: true,
+      hasWhitespaceOnlyLine: false,
+      hasTrailingWhitespace: false,
+      hasTrailingNewline: true,
+      tabColumns: [16, 19],
+    },
+  ),
+];
 
 export function generateEdgeCaseCorpus(): EdgeCaseCorpus {
   return {

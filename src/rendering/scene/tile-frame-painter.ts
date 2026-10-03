@@ -1,16 +1,22 @@
 import { TilePass, type TileInstance } from "../passes/tile-pass";
 import { recordDrawMetrics, type FrameDrawMetrics } from "./frame-draw-metrics";
-import { TilePool } from "./tile-pool";
+import { TilePool, type TilePoolRegion } from "./tile-pool";
 import { tileContentSize } from "./tile-plan";
-import { CONTENT_KIND, HEADER_KIND, TileRecords } from "./tile-records";
-import { TileSetPlanner } from "./tile-sets";
+import { CONTENT_KIND, HEADER_KIND, LABEL_KIND } from "./tile-records";
+import type { WidgetTiles } from "./widget-tiles";
 
 interface TileFramePainterConfig {
   readonly tilePass: TilePass;
   readonly pool: TilePool;
-  readonly tileRecords: TileRecords;
-  readonly planner: TileSetPlanner;
   readonly metrics: FrameDrawMetrics;
+}
+
+export interface TileFramePaintInput {
+  readonly widgets: readonly WidgetTiles[];
+  count: number;
+  detailIsMinimap: boolean;
+  documentId: string;
+  hiddenBodyId: string | undefined;
 }
 
 export class TileFramePainter {
@@ -19,9 +25,12 @@ export class TileFramePainter {
     localY: 0,
     width: 0,
     height: 0,
-    layer: 0,
     uvMaxX: 0,
     uvMaxY: 0,
+    widgetRow: -1,
+    region: 0,
+    uvOffsetX: 0,
+    uvOffsetY: 0,
   };
 
   private readonly drawnTile = {
@@ -30,25 +39,22 @@ export class TileFramePainter {
     highlighted: false,
     epoch: -1,
     contentVersion: -1,
+    document: false,
   };
 
   private bodyTopCss = 0;
-
+  private documentId = "";
   private readonly tilePass: TilePass;
-
   private readonly pool: TilePool;
-
-  private readonly tileRecords: TileRecords;
-
-  private readonly planner: TileSetPlanner;
-
   private readonly metrics: FrameDrawMetrics;
+  private readonly region: TilePoolRegion = {
+    uvOffsetX: 0,
+    uvOffsetY: 0,
+  };
 
   constructor(config: TileFramePainterConfig) {
     this.tilePass = config.tilePass;
     this.pool = config.pool;
-    this.tileRecords = config.tileRecords;
-    this.planner = config.planner;
     this.metrics = config.metrics;
   }
 
@@ -56,93 +62,123 @@ export class TileFramePainter {
     this.bodyTopCss = bodyTopCss;
   }
 
-  draw(detailIsMinimap: boolean): void {
-    if (detailIsMinimap) this.pushMinimapLabel();
-    else this.pushHeaderInstances();
+  draw(input: TileFramePaintInput): void {
+    this.documentId = input.documentId;
+    for (let index = 0; index < input.count; index += 1) {
+      const widget = input.widgets[index];
+      if (!widget) continue;
+      this.pushHeaderInstances(widget);
+      if (input.detailIsMinimap) this.pushMinimapLabel(widget);
+    }
     this.tilePass.markTitleBoundary();
-    if (!detailIsMinimap) this.pushContentInstances();
-  }
-
-  private pushHeaderInstances(): void {
-    for (
-      let index = 0;
-      index < this.planner.drawHeaderFallbackCount;
-      index += 1
-    ) {
-      const record = this.planner.drawHeaderFallback[index] ?? -1;
-      if (record >= 0) this.pushRecord(record, true);
-    }
-    for (
-      let index = 0;
-      index < this.planner.drawHeaderCurrentCount;
-      index += 1
-    ) {
-      const record = this.planner.drawHeaderCurrent[index] ?? -1;
-      if (record >= 0) this.pushRecord(record, false);
+    if (input.detailIsMinimap) return;
+    for (let index = 0; index < input.count; index += 1) {
+      const widget = input.widgets[index];
+      if (!widget || widget.fileId === input.hiddenBodyId) continue;
+      this.pushContentInstances(widget);
     }
   }
 
-  private pushContentInstances(): void {
-    for (let index = 0; index < this.planner.drawFallbackCount; index += 1) {
-      const record = this.planner.drawFallback[index] ?? -1;
-      if (record >= 0) this.pushRecord(record, true);
-    }
-    for (let index = 0; index < this.planner.drawCurrentCount; index += 1) {
-      const record = this.planner.drawCurrent[index] ?? -1;
-      if (record >= 0) this.pushRecord(record, false);
+  private pushHeaderInstances(widget: WidgetTiles): void {
+    this.pushRecords(
+      widget,
+      widget.planner.drawHeaderFallback,
+      widget.planner.drawHeaderFallbackCount,
+      true,
+    );
+    this.pushRecords(
+      widget,
+      widget.planner.drawHeaderCurrent,
+      widget.planner.drawHeaderCurrentCount,
+      false,
+    );
+  }
+
+  private pushContentInstances(widget: WidgetTiles): void {
+    this.pushRecords(
+      widget,
+      widget.planner.drawFallback,
+      widget.planner.drawFallbackCount,
+      true,
+    );
+    this.pushRecords(
+      widget,
+      widget.planner.drawCurrent,
+      widget.planner.drawCurrentCount,
+      false,
+    );
+  }
+
+  private pushMinimapLabel(widget: WidgetTiles): void {
+    this.pushRecords(
+      widget,
+      widget.planner.drawLabelFallback,
+      widget.planner.drawLabelFallbackCount,
+      true,
+    );
+    this.pushRecords(
+      widget,
+      widget.planner.drawLabelCurrent,
+      widget.planner.drawLabelCurrentCount,
+      false,
+    );
+  }
+
+  private pushRecords(
+    widget: WidgetTiles,
+    records: Int32Array,
+    count: number,
+    fallback: boolean,
+  ): void {
+    for (let index = 0; index < count; index += 1) {
+      const record = records[index] ?? -1;
+      if (record >= 0) this.pushRecord(widget, record, fallback);
     }
   }
 
-  private pushRecord(record: number, fallback: boolean): void {
-    const key = this.tileRecords.keys[record];
-    if (!key || !this.tileRecords.records.ready[record]) return;
-    const layer = this.pool.layerFor(key);
-    if (layer === undefined) return;
-    this.setTileInstance(record, layer);
+  private pushRecord(
+    widget: WidgetTiles,
+    record: number,
+    fallback: boolean,
+  ): void {
+    const key = widget.records.keys[record];
+    if (!key || !widget.records.records.ready[record]) return;
+    if (!this.pool.regionFor(key, this.region)) return;
+    this.setTileInstance(widget, record, this.region);
     this.tilePass.pushTileInstance(this.tileInstance);
     this.drawnTile.content =
-      this.tileRecords.records.kind[record] === CONTENT_KIND;
+      widget.records.records.kind[record] === CONTENT_KIND;
     this.drawnTile.fallback = fallback;
-    this.drawnTile.highlighted = this.tileRecords.highlighted[record] === 1;
-    this.drawnTile.epoch = this.tileRecords.records.epoch[record] ?? -1;
+    this.drawnTile.highlighted = widget.records.highlighted[record] === 1;
+    this.drawnTile.epoch = widget.records.records.epoch[record] ?? -1;
     this.drawnTile.contentVersion = this.drawnTile.content
-      ? (this.tileRecords.records.contentVersion[record] ?? -1)
+      ? (widget.records.records.contentVersion[record] ?? -1)
       : -1;
+    this.drawnTile.document = widget.fileId === this.documentId;
     recordDrawMetrics(this.metrics, this.drawnTile);
   }
 
-  private pushMinimapLabel(): void {
-    for (
-      let index = 0;
-      index < this.planner.drawLabelFallbackCount;
-      index += 1
-    ) {
-      const record = this.planner.drawLabelFallback[index] ?? -1;
-      if (record >= 0) this.pushRecord(record, true);
-    }
-    for (
-      let index = 0;
-      index < this.planner.drawLabelCurrentCount;
-      index += 1
-    ) {
-      const record = this.planner.drawLabelCurrent[index] ?? -1;
-      if (record >= 0) this.pushRecord(record, false);
-    }
-  }
-
-  private setTileInstance(record: number, layer: number): void {
-    const rasterScale = this.tileRecords.records.rasterScale[record] ?? 1;
+  private setTileInstance(
+    widget: WidgetTiles,
+    record: number,
+    region: TilePoolRegion,
+  ): void {
+    const records = widget.records.records;
+    const rasterScale = records.rasterScale[record] ?? 1;
     const size = tileContentSize(rasterScale);
-    this.tileInstance.localX = this.tileRecords.records.localX[record] ?? 0;
+    const kind = records.kind[record];
+    this.tileInstance.localX = records.localX[record] ?? 0;
     this.tileInstance.localY =
-      (this.tileRecords.records.localY[record] ?? 0) +
-      (this.tileRecords.records.kind[record] === HEADER_KIND
-        ? 0
-        : this.bodyTopCss);
-    this.tileInstance.width = this.tileRecords.records.width[record] ?? 0;
-    this.tileInstance.height = this.tileRecords.records.height[record] ?? 0;
-    this.tileInstance.layer = layer;
+      (records.localY[record] ?? 0) +
+      (kind === HEADER_KIND ? 0 : kind === CONTENT_KIND ? 0 : this.bodyTopCss);
+    this.tileInstance.width = records.width[record] ?? 0;
+    this.tileInstance.height = records.height[record] ?? 0;
     this.tileInstance.uvMaxX = this.tileInstance.width / size;
     this.tileInstance.uvMaxY = this.tileInstance.height / size;
+    this.tileInstance.widgetRow = widget.row;
+    this.tileInstance.region =
+      kind === CONTENT_KIND ? 0 : kind === HEADER_KIND ? 1 : LABEL_KIND;
+    this.tileInstance.uvOffsetX = region.uvOffsetX;
+    this.tileInstance.uvOffsetY = region.uvOffsetY;
   }
 }

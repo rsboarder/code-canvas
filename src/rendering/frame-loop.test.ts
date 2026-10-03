@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { FrameSample } from "../shared/frame";
-import { FrameLoop, type FrameStage } from "./frame-loop";
+import type { FrameSample, FrameStage } from "../shared/frame";
+import { FrameLoop } from "./frame-loop";
 
 function stubAnimationFrame(): ((time: number) => void)[] {
   const callbacks: ((time: number) => void)[] = [];
@@ -135,6 +135,80 @@ describe("FrameLoop metrics", () => {
   });
 });
 
+describe("FrameLoop sample state", () => {
+  it("carries sample state to one tick and resets it for the next", () => {
+    const callbacks = stubAnimationFrame();
+    vi.spyOn(performance, "now").mockReturnValue(1);
+    let tick = 0;
+    const samples: {
+      detailLevel: string | undefined;
+      visibleWidgetCount: number | undefined;
+      residencyBacklogDepth: number | undefined;
+    }[] = [];
+    const loop = new FrameLoop(
+      [
+        {
+          name: "draw",
+          run: () => {
+            tick += 1;
+            if (tick === 1) loop.setSampleState("minimap", 3, 7);
+          },
+        },
+      ],
+      (sample) =>
+        samples.push({
+          detailLevel: sample.detailLevel,
+          visibleWidgetCount: sample.visibleWidgetCount,
+          residencyBacklogDepth: sample.residencyBacklogDepth,
+        }),
+    );
+
+    loop.invalidate();
+    callbacks.shift()?.(0);
+    loop.invalidate();
+    callbacks.shift()?.(0);
+
+    expect(samples).toEqual([
+      {
+        detailLevel: "minimap",
+        visibleWidgetCount: 3,
+        residencyBacklogDepth: 7,
+      },
+      {
+        detailLevel: undefined,
+        visibleWidgetCount: Number.NaN,
+        residencyBacklogDepth: Number.NaN,
+      },
+    ]);
+  });
+
+  it("carries text switch state for one tick and resets it for the next", () => {
+    const callbacks = stubAnimationFrame();
+    vi.spyOn(performance, "now").mockReturnValue(1);
+    let tick = 0;
+    const pending: boolean[] = [];
+    const loop = new FrameLoop(
+      [
+        {
+          name: "draw",
+          run: () => {
+            tick += 1;
+            if (tick === 1) loop.setSampleState("minimap", 3, 7, true);
+          },
+        },
+      ],
+      (sample) => pending.push(sample.textSwitchPending ?? false),
+    );
+
+    loop.invalidate();
+    callbacks.shift()?.(0);
+    loop.invalidate();
+    callbacks.shift()?.(0);
+
+    expect(pending).toEqual([true, false]);
+  });
+});
+
 describe("FrameLoop liveness", () => {
   it("runs the following tick when drain uploads a tile", () => {
     const callbacks = stubAnimationFrame();
@@ -169,5 +243,31 @@ describe("FrameLoop liveness", () => {
 
     expect(drain).toHaveBeenCalledTimes(1);
     expect(callbacks).toHaveLength(0);
+  });
+});
+
+describe("FrameLoop idle samples", () => {
+  it("marks the first tick after idle and clears the mark for a continuous run", () => {
+    const callbacks = stubAnimationFrame();
+    vi.spyOn(performance, "now").mockReturnValue(1);
+    const samples: FrameSample[] = [];
+    const loop = new FrameLoop([{ name: "draw", run: vi.fn() }], (sample) =>
+      samples.push({ ...sample }),
+    );
+
+    loop.invalidate();
+    callbacks.shift()?.(0);
+    loop.invalidate();
+    callbacks.shift()?.(0);
+    loop.setGestureInProgress(true);
+    callbacks.shift()?.(0);
+    callbacks.shift()?.(0);
+
+    expect(samples.map((sample) => sample.afterIdle)).toEqual([
+      false,
+      true,
+      true,
+      false,
+    ]);
   });
 });

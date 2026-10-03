@@ -11,14 +11,6 @@ The system SHALL let the user pick a local folder via the system dialog and recu
 - **WHEN** the user selects a folder with 200 TS files and a node_modules directory
 - **THEN** the canvas has exactly 200 widgets, with no files from node_modules
 
-#### Scenario: Empty folder
-- **WHEN** the selected folder has no TS files
-- **THEN** the system shows a message that no files were found and offers to select another folder
-
-#### Scenario: Unsupported browser
-- **WHEN** the product is opened in a browser without the File System Access API
-- **THEN** the system shows a message that Chrome is required, instead of an empty canvas
-
 ### Requirement: Large and atypical files
 The system SHALL load files of any size, but the target performance figures are guaranteed for files up to 2000 lines and folders up to 200 files. Files that do not decode as UTF-8 SHALL be shown as a widget with an error message instead of code.
 
@@ -28,7 +20,7 @@ The system SHALL load files of any size, but the target performance figures are 
 
 #### Scenario: Folder larger than 200 files
 - **WHEN** the folder has 350 TS files
-- **THEN** all 350 files are loaded, and the system shows an unobtrusive warning that performance is guaranteed up to 200 files
+- **THEN** all 350 files are loaded
 
 ### Requirement: Reopening the last folder
 The system SHALL remember the last opened folder and, on the next launch, offer to reopen it in one action (requesting browser permission if required).

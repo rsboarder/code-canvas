@@ -24,7 +24,12 @@ const mainThreadMetadata: TraceEvent = {
   args: { name: "CrRendererMain" },
 };
 
-const frame = (index: number, state: string, category = "cc"): TraceEvent[] => {
+const frame = (
+  index: number,
+  state: string,
+  category = "cc",
+  modelState = state,
+): TraceEvent[] => {
   const timestamp = index * 8_000;
   return [
     {
@@ -49,6 +54,177 @@ const frame = (index: number, state: string, category = "cc"): TraceEvent[] => {
       id: String(index),
       args: { frame_reporter: { state } },
     },
+    ...modelFrameEvents(timestamp + 10_000, index + 1, modelState),
+  ];
+};
+
+const modelFrameEvents = (
+  timestamp: number,
+  sequence: number,
+  state: string,
+): TraceEvent[] => {
+  const modelEvents: TraceEvent[] = [
+    {
+      name: "SetLayerTreeId",
+      cat: "",
+      ph: "I",
+      ts: 0,
+      pid: 1,
+      tid: 2,
+      args: { data: { frame: "", layerTreeId: 7 } },
+    },
+    {
+      name: "BeginFrame",
+      cat: "disabled-by-default-devtools.timeline.frame",
+      ph: "I",
+      ts: timestamp,
+      pid: 1,
+      tid: 2,
+      args: { layerTreeId: 7, frameSeqId: sequence },
+    },
+  ];
+  if (state === "STATE_DROPPED" || state === "STATE_PRESENTED_PARTIAL") {
+    modelEvents.push({
+      name: "DroppedFrame",
+      cat: "disabled-by-default-devtools.timeline.frame",
+      ph: "I",
+      ts: timestamp + 1_000,
+      pid: 1,
+      tid: 2,
+      args: {
+        layerTreeId: 7,
+        frameSeqId: sequence,
+        hasPartialUpdate: state === "STATE_PRESENTED_PARTIAL",
+      },
+    });
+  }
+  if (
+    state !== "STATE_PRESENTED_ALL" &&
+    state !== "STATE_PRESENTED_PARTIAL" &&
+    state !== "STATE_DROPPED"
+  ) {
+    modelEvents.push({
+      name: "NeedsBeginFrameChanged",
+      cat: "disabled-by-default-devtools.timeline.frame",
+      ph: "I",
+      ts: timestamp + 1_000,
+      pid: 1,
+      tid: 2,
+      args: { layerTreeId: 7, data: { needsBeginFrame: 1 } },
+    });
+  }
+  modelEvents.push({
+    name: "DrawFrame",
+    cat: "disabled-by-default-devtools.timeline.frame",
+    ph: "I",
+    ts: timestamp + 4_000,
+    pid: 1,
+    tid: 2,
+    args: { layerTreeId: 7, frameSeqId: sequence },
+  });
+  return modelEvents;
+};
+
+const modelFrame = (
+  index: number,
+  state = "STATE_PRESENTED_ALL",
+): TraceEvent[] => modelFrameEvents(index * 8_000 + 10_000, index + 1, state);
+
+const pipelineReporterFrames = (events: TraceEvents): TraceEvent[] =>
+  events
+    .filter(
+      (event) =>
+        event.name === "PipelineReporter" &&
+        event.ph === "b" &&
+        event.cat?.split(",").includes("cc"),
+    )
+    .slice()
+    .sort((left, right) => left.ts - right.ts);
+
+const pipelineState = (event: TraceEvent): string => {
+  const reporter = event.args?.frame_reporter;
+  if (typeof reporter !== "object" || reporter === null) {
+    return "STATE_PRESENTED_ALL";
+  }
+  return "state" in reporter ? String(reporter.state) : "STATE_PRESENTED_ALL";
+};
+
+const modelEventsForPipelineFrames = (
+  pipelineFrames: readonly TraceEvent[],
+): TraceEvent[] => {
+  const modelEvents = pipelineFrames.flatMap((event, index) =>
+    modelFrameEvents(event.ts + 1_000, index + 1, pipelineState(event)),
+  );
+  const last = pipelineFrames[pipelineFrames.length - 1];
+  if (
+    last &&
+    ["STATE_DROPPED", "STATE_PRESENTED_PARTIAL"].includes(pipelineState(last))
+  ) {
+    modelEvents.push(
+      ...modelFrameEvents(
+        last.ts + 9_000,
+        pipelineFrames.length + 1,
+        "STATE_PRESENTED_ALL",
+      ),
+    );
+  }
+  return modelEvents;
+};
+
+interface FrameModelFixtureContext {
+  readonly pid: number;
+  readonly mainThreadId: number;
+  readonly compositorThreadId: number;
+  readonly layerTreeId: unknown;
+  readonly frameId: unknown;
+}
+
+const frameModelFixtureContext = (
+  events: TraceEvents,
+): FrameModelFixtureContext => {
+  const layerTreeEvent = events.find(
+    (event) => event.name === "SetLayerTreeId",
+  );
+  const compositorThread = events.find(
+    (event) =>
+      event.name === "thread_name" &&
+      event.args?.name === "Compositor" &&
+      event.pid === layerTreeEvent?.pid,
+  );
+  const data = layerTreeEvent?.args?.data;
+  const layerTreeData = typeof data === "object" && data !== null ? data : {};
+  return {
+    pid: layerTreeEvent?.pid ?? 1,
+    mainThreadId: layerTreeEvent?.tid ?? 2,
+    compositorThreadId: compositorThread?.tid ?? 2,
+    layerTreeId: "layerTreeId" in layerTreeData ? layerTreeData.layerTreeId : 7,
+    frameId: "frame" in layerTreeData ? layerTreeData.frame : "",
+  };
+};
+
+const adaptModelEvent = (
+  event: TraceEvent,
+  context: FrameModelFixtureContext,
+): TraceEvent => ({
+  ...event,
+  pid: context.pid,
+  tid:
+    event.name === "SetLayerTreeId"
+      ? context.mainThreadId
+      : context.compositorThreadId,
+  args:
+    event.name === "SetLayerTreeId"
+      ? { data: { frame: context.frameId, layerTreeId: context.layerTreeId } }
+      : { ...event.args, layerTreeId: context.layerTreeId },
+});
+
+const withFrameModelEvents = (events: TraceEvents): TraceEvents => {
+  const pipelineFrames = pipelineReporterFrames(events);
+  const context = frameModelFixtureContext(events);
+  const modelEvents = modelEventsForPipelineFrames(pipelineFrames);
+  return [
+    ...events,
+    ...modelEvents.map((event) => adaptModelEvent(event, context)),
   ];
 };
 
@@ -88,6 +264,10 @@ const traceForStates = (
 ): TraceEvents => [
   mainThreadMetadata,
   ...states.flatMap((state, index) => frame(index, state, category)),
+  ...(states[states.length - 1] === "STATE_DROPPED" ||
+  states[states.length - 1] === "STATE_PRESENTED_PARTIAL"
+    ? modelFrame(states.length)
+    : []),
   ...tasks,
 ];
 
@@ -115,6 +295,7 @@ it("counts partially presented frames", async () => {
   );
 
   expect(metrics.frames.partiallyPresented).toBe(1);
+  expect(metrics.pipelineFrames?.partiallyPresented).toBe(1);
 });
 
 it("counts dropped frames", async () => {
@@ -125,17 +306,45 @@ it("counts dropped frames", async () => {
   expect(metrics.frames.dropped).toBe(1);
 });
 
-it("ignores idle frames when measuring presentation intervals", async () => {
+it("uses the frame model when PipelineReporter says a frame was dropped", async () => {
+  const metrics = await classify([
+    mainThreadMetadata,
+    ...frame(0, "STATE_DROPPED", "cc", "STATE_PRESENTED_ALL"),
+    task(0, 1_000, "https://app.test/assets/main.js"),
+  ]);
+
+  expect(metrics.frames.dropped).toBe(0);
+  expect(metrics.pipelineFrames?.dropped).toBe(1);
+});
+
+it("does not count a gap of idle frames as a presentation interval", async () => {
   const metrics = await classify(
     traceForStates([
       "STATE_PRESENTED_ALL",
-      "STATE_PRESENTED_NO_DAMAGE",
+      "STATE_PRESENTED_ALL",
+      "STATE_NO_UPDATE_DESIRED",
+      "STATE_NO_UPDATE_DESIRED",
       "STATE_PRESENTED_ALL",
     ]),
   );
 
-  expect(metrics.frames.idle).toBe(1);
-  expect(metrics.intervalsMs.max).toBe(16);
+  expect(metrics.frames.idle).toBe(2);
+  expect(metrics.intervalsMs.max).toBe(8);
+  expect(metrics.intervalsOver12_5Ms).toBe(0);
+});
+
+it("counts a gap that holds a dropped frame", async () => {
+  const metrics = await classify(
+    traceForStates([
+      "STATE_PRESENTED_ALL",
+      "STATE_NO_UPDATE_DESIRED",
+      "STATE_DROPPED",
+      "STATE_PRESENTED_ALL",
+    ]),
+  );
+
+  expect(metrics.frames.dropped).toBe(1);
+  expect(metrics.intervalsMs.max).toBe(24);
   expect(metrics.intervalsOver12_5Ms).toBe(1);
 });
 
@@ -176,6 +385,13 @@ it("counts whole-trace frames separately from interaction-window frames", async 
     ...frame(40, "STATE_PRESENTED_NO_DAMAGE"), // after the tail
   ]);
 
+  expect(metrics.pipelineFrames).toEqual({
+    total: 3,
+    presented: 1,
+    partiallyPresented: 1,
+    dropped: 1,
+    idle: 0,
+  });
   expect(metrics.traceFrames).toEqual({
     total: 5,
     presented: 2,
@@ -185,10 +401,10 @@ it("counts whole-trace frames separately from interaction-window frames", async 
   });
   expect(metrics.frames).toEqual({
     total: 3,
-    presented: 1,
+    presented: 0,
     partiallyPresented: 1,
     dropped: 1,
-    idle: 0,
+    idle: 1,
   });
 });
 
@@ -324,7 +540,7 @@ it("reproduces the paste-500-lines golden trace counts", async () => {
   const decoded = JSON.parse(gunzipSync(compressed).toString("utf8")) as {
     traceEvents: TraceEvent[];
   };
-  const metrics = await classify(decoded.traceEvents);
+  const metrics = await classify(withFrameModelEvents(decoded.traceEvents));
   const durationMs = performance.now() - startedAt;
   process.stdout.write(`golden trace duration: ${durationMs.toFixed(1)} ms\n`);
 

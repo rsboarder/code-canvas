@@ -11,7 +11,13 @@ export interface EditorOpenOptions {
   readonly cursor: EditorCursor;
 }
 
+export interface EditorPrepareOptions {
+  readonly text: string;
+  readonly language: EditorOpenOptions["language"];
+}
+
 export interface EditorHost {
+  prepare(options: EditorPrepareOptions): Promise<void>;
   open(options: EditorOpenOptions): void;
   close(): void;
   setVisible(visible: boolean): void;
@@ -20,7 +26,6 @@ export interface EditorHost {
   setPosition(cursor: EditorCursor): void;
   getPosition(): EditorCursor | undefined;
   getValue(): string;
-  hasContentChanged(): boolean;
   getLineCount(): number;
   onChange(listener: () => void): () => void;
   onEscape(listener: () => void): () => void;

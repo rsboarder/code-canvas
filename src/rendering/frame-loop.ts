@@ -1,9 +1,9 @@
-import type { FrameSampleSink, FrameStageTiming } from "../shared/frame";
-
-export interface FrameStage {
-  readonly name: string;
-  run(): void;
-}
+import type {
+  FrameSample,
+  FrameSampleSink,
+  FrameStage,
+  FrameStageTiming,
+} from "../shared/frame";
 
 // Fields a stage can attach to this tick's Frame Sample before it is sent
 // (the `draw` stage reports the tile pool's metrics this way, since only it
@@ -18,13 +18,24 @@ export class FrameLoop {
   private frameRequested = false;
   private dirty = true;
   private gesture = false;
+  private afterIdle = false;
   private readonly stageTimings: FrameStageTiming[];
   private readonly sample: {
     frameStartTime: number;
+    afterIdle: boolean;
     stageTimings: FrameStageTiming[];
+    detailLevel: FrameSample["detailLevel"];
+    textSwitchPending: boolean;
+    visibleWidgetCount: FrameSample["visibleWidgetCount"];
+    residencyBacklogDepth: FrameSample["residencyBacklogDepth"];
   } & FrameMetrics = {
     frameStartTime: 0,
+    afterIdle: false,
     stageTimings: [] as FrameStageTiming[],
+    detailLevel: undefined,
+    textSwitchPending: false,
+    visibleWidgetCount: Number.NaN,
+    residencyBacklogDepth: Number.NaN,
     tileMemoryBytes: Number.NaN,
     missingTile: false,
     timeToSharpMs: Number.NaN,
@@ -34,6 +45,12 @@ export class FrameLoop {
     if (!this.dirty && !this.gesture) return;
     this.dirty = false;
     this.sample.frameStartTime = performance.now();
+    this.sample.afterIdle = this.afterIdle;
+    this.afterIdle = false;
+    this.sample.detailLevel = undefined;
+    this.sample.textSwitchPending = false;
+    this.sample.visibleWidgetCount = Number.NaN;
+    this.sample.residencyBacklogDepth = Number.NaN;
     this.sample.tileMemoryBytes = Number.NaN;
     this.sample.missingTile = false;
     this.sample.timeToSharpMs = Number.NaN;
@@ -45,8 +62,9 @@ export class FrameLoop {
       stage.run();
       timing.durationMs = performance.now() - startedAt;
     }
-    this.sampleSink?.(this.sample);
+    this.sampleSink?.(this.sample as FrameSample);
     if (this.gesture) this.schedule();
+    if (this.idle) this.afterIdle = true;
   };
 
   constructor(
@@ -73,6 +91,18 @@ export class FrameLoop {
     this.sample.timeToSharpMs = metrics.timeToSharpMs;
   }
 
+  setSampleState(
+    detailLevel: FrameSample["detailLevel"],
+    visibleWidgetCount: number,
+    residencyBacklogDepth: number,
+    textSwitchPending = false,
+  ): void {
+    this.sample.detailLevel = detailLevel;
+    this.sample.textSwitchPending = textSwitchPending;
+    this.sample.visibleWidgetCount = visibleWidgetCount;
+    this.sample.residencyBacklogDepth = residencyBacklogDepth;
+  }
+
   invalidate(): void {
     this.dirty = true;
     this.schedule();
@@ -81,6 +111,10 @@ export class FrameLoop {
   setGestureInProgress(value: boolean): void {
     this.gesture = value;
     if (value) this.schedule();
+  }
+
+  get idle(): boolean {
+    return !this.frameRequested && !this.gesture;
   }
 
   private schedule(): void {

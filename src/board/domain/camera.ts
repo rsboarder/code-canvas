@@ -10,7 +10,15 @@ import {
 const CAMERA_MIN_SCALE = 0.05;
 const CAMERA_MAX_SCALE = 4;
 
-export class Camera {
+export interface CameraView {
+  readonly offsetX: number;
+  readonly offsetY: number;
+  readonly scale: number;
+  toScreen(boardPoint: Vec2, out: Vec2): Vec2;
+  toBoard(screenPoint: Vec2, out: Vec2): Vec2;
+}
+
+export class Camera implements CameraView {
   private _offset: Vec2;
   private _scale: number;
 
@@ -45,7 +53,8 @@ export class Camera {
   }
 
   setPosition(offset: Vec2, scale: number): void {
-    this._offset = { ...offset };
+    this._offset.x = offset.x;
+    this._offset.y = offset.y;
     this._scale = clampScale(scale);
   }
 

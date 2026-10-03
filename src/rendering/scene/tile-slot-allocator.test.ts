@@ -57,4 +57,25 @@ describe("TileSlotAllocator", () => {
     expect(result.slot).toBe(first.slot);
     expect(result.evictedKey).toBeUndefined();
   });
+
+  it("grows without moving existing keys and fills new slots before evicting", () => {
+    const allocator = new TileSlotAllocator(2);
+    const first = allocator.acquire("a", true);
+    const firstSlot = first.slot;
+    const second = allocator.acquire("b", false);
+    const secondSlot = second.slot;
+    allocator.touch("b");
+
+    allocator.grow(4);
+
+    expect(allocator.capacity).toBe(4);
+    expect(allocator.slotFor("a")).toBe(firstSlot);
+    expect(allocator.slotFor("b")).toBe(secondSlot);
+    expect(allocator.isPinned("a")).toBe(true);
+    expect(allocator.pinnedCount()).toBe(1);
+    expect(allocator.acquire("c", false).evictedKey).toBeUndefined();
+    expect(allocator.acquire("d", false).evictedKey).toBeUndefined();
+    expect(allocator.slotFor("c")).toBe(2);
+    expect(allocator.slotFor("d")).toBe(3);
+  });
 });

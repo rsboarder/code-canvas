@@ -6,6 +6,8 @@ import {
   type Statistic,
 } from "./frame-statistics";
 
+type DetailLevelName = NonNullable<FrameSample["detailLevel"]>;
+
 const DEFAULT_CAPACITY = 240;
 
 export interface FrameStageStats {
@@ -25,6 +27,15 @@ export interface FrameStatsSnapshot extends FrameStageStats {
   readonly tileMemoryBytes: Statistic;
   readonly missingTileFrameCount: number;
   readonly timeToSharpMs: Statistic;
+  readonly textSwitchLagMs: Statistic;
+  readonly residencyBacklog: Statistic;
+}
+
+interface FrameOverlayMetrics {
+  readonly framesPerSecond: number;
+  readonly p99IntervalMs: Statistic;
+  readonly visibleWidgetCount: Statistic;
+  readonly detailLevel: DetailLevelName | typeof UNAVAILABLE;
 }
 
 interface StageSamples {
@@ -34,6 +45,8 @@ interface StageSamples {
 
 export class FrameStats {
   private readonly intervals: Float64Array;
+  private readonly intervalPresent: Uint8Array;
+  private readonly sampleStartTimes: Float64Array;
   private readonly stageSamples = new Map<string, StageSamples>();
   private readonly stageNames: string[] = [];
   private writeIndex = 0;
@@ -43,18 +56,29 @@ export class FrameStats {
   private latestTileMemoryBytes: number | undefined;
   private missingTileFrameCount = 0;
   private latestTimeToSharpMs: number | undefined;
+  private textSwitchPendingStart: number | undefined;
+  private previousDetailLevel: FrameSample["detailLevel"];
+  private largestTextSwitchLagMs: number | undefined;
+  private largestResidencyBacklog: number | undefined;
+  private latestDetailLevel: DetailLevelName | undefined;
+  private latestVisibleWidgetCount: number | undefined;
 
   constructor(private readonly capacity = DEFAULT_CAPACITY) {
     if (!Number.isInteger(capacity) || capacity < 1) {
       throw new RangeError("FrameStats capacity must be a positive integer");
     }
     this.intervals = new Float64Array(capacity);
+    this.intervalPresent = new Uint8Array(capacity);
+    this.sampleStartTimes = new Float64Array(capacity);
   }
 
   record(sample: FrameSample): void {
     const previous = this.previousFrameStart;
-    if (previous !== undefined) {
+    this.intervalPresent[this.writeIndex] = 0;
+    this.sampleStartTimes[this.writeIndex] = sample.frameStartTime;
+    if (previous !== undefined && sample.afterIdle !== true) {
       this.intervals[this.writeIndex] = sample.frameStartTime - previous;
+      this.intervalPresent[this.writeIndex] = 1;
     }
     this.previousFrameStart = sample.frameStartTime;
     this.clearStageSlots();
@@ -76,6 +100,16 @@ export class FrameStats {
     ) {
       this.latestTimeToSharpMs = sample.timeToSharpMs;
     }
+    this.recordTextSwitch(sample);
+    this.recordLatestViewState(sample);
+    if (
+      sample.residencyBacklogDepth !== undefined &&
+      Number.isFinite(sample.residencyBacklogDepth) &&
+      (this.largestResidencyBacklog === undefined ||
+        sample.residencyBacklogDepth > this.largestResidencyBacklog)
+    ) {
+      this.largestResidencyBacklog = sample.residencyBacklogDepth;
+    }
     this.writeIndex = (this.writeIndex + 1) % this.capacity;
     this.sampleCount = Math.min(this.sampleCount + 1, this.capacity);
     this.totalSampleCount += 1;
@@ -93,6 +127,12 @@ export class FrameStats {
     this.latestTileMemoryBytes = undefined;
     this.missingTileFrameCount = 0;
     this.latestTimeToSharpMs = undefined;
+    this.textSwitchPendingStart = undefined;
+    this.previousDetailLevel = undefined;
+    this.largestTextSwitchLagMs = undefined;
+    this.largestResidencyBacklog = undefined;
+    this.latestDetailLevel = undefined;
+    this.latestVisibleWidgetCount = undefined;
   }
 
   snapshot(): FrameStatsSnapshot {
@@ -110,12 +150,86 @@ export class FrameStats {
       tileMemoryBytes: this.latestTileMemoryBytes ?? UNAVAILABLE,
       missingTileFrameCount: this.missingTileFrameCount,
       timeToSharpMs: this.latestTimeToSharpMs ?? UNAVAILABLE,
+      textSwitchLagMs: this.largestTextSwitchLagMs ?? UNAVAILABLE,
+      residencyBacklog: this.largestResidencyBacklog ?? UNAVAILABLE,
+    };
+  }
+
+  overlayMetrics(now: number): FrameOverlayMetrics {
+    let framesPerSecond = 0;
+    const earliest = now - 1000;
+    for (let offset = 0; offset < this.sampleCount; offset += 1) {
+      const index =
+        (this.writeIndex - this.sampleCount + offset + this.capacity) %
+        this.capacity;
+      const startTime = this.sampleStartTimes[index];
+      if (
+        startTime !== undefined &&
+        startTime >= earliest &&
+        startTime <= now
+      ) {
+        framesPerSecond += 1;
+      }
+    }
+    return {
+      framesPerSecond,
+      p99IntervalMs: this.snapshot().p99,
+      visibleWidgetCount: this.latestVisibleWidgetCount ?? UNAVAILABLE,
+      detailLevel: this.latestDetailLevel ?? UNAVAILABLE,
     };
   }
 
   private clearStageSlots(): void {
     for (const stage of this.stageSamples.values()) {
       stage.present[this.writeIndex] = 0;
+    }
+  }
+
+  private recordLatestViewState(sample: FrameSample): void {
+    if (sample.detailLevel !== undefined) {
+      this.latestDetailLevel = sample.detailLevel;
+    }
+    if (
+      sample.visibleWidgetCount !== undefined &&
+      !Number.isNaN(sample.visibleWidgetCount)
+    ) {
+      this.latestVisibleWidgetCount = sample.visibleWidgetCount;
+    }
+  }
+
+  private recordTextSwitch(sample: FrameSample): void {
+    if (
+      sample.textSwitchPending === true &&
+      this.textSwitchPendingStart === undefined
+    ) {
+      this.textSwitchPendingStart = sample.frameStartTime;
+    }
+    if (
+      sample.detailLevel === "text" &&
+      this.textSwitchPendingStart !== undefined
+    ) {
+      const lag = sample.frameStartTime - this.textSwitchPendingStart;
+      if (
+        this.largestTextSwitchLagMs === undefined ||
+        lag > this.largestTextSwitchLagMs
+      ) {
+        this.largestTextSwitchLagMs = lag;
+      }
+      this.textSwitchPendingStart = undefined;
+    } else if (
+      sample.detailLevel === "text" &&
+      this.previousDetailLevel === "minimap"
+    ) {
+      this.largestTextSwitchLagMs ??= 0;
+    } else if (
+      sample.detailLevel === "minimap" &&
+      sample.textSwitchPending === false &&
+      this.textSwitchPendingStart !== undefined
+    ) {
+      this.textSwitchPendingStart = undefined;
+    }
+    if (sample.detailLevel !== undefined) {
+      this.previousDetailLevel = sample.detailLevel;
     }
   }
 
@@ -132,14 +246,14 @@ export class FrameStats {
   }
 
   private collectIntervals(): number[] {
-    const intervalCount = Math.max(0, this.sampleCount - 1);
     const values: number[] = [];
-    for (let offset = 0; offset < intervalCount; offset += 1) {
+    for (let offset = 0; offset < this.sampleCount; offset += 1) {
       const index =
-        (this.writeIndex - intervalCount + offset + this.capacity) %
+        (this.writeIndex - this.sampleCount + offset + this.capacity) %
         this.capacity;
-      const value = this.intervals[index];
-      if (value !== undefined) values.push(value);
+      if (this.intervalPresent[index] === 1) {
+        values.push(this.intervals[index] ?? 0);
+      }
     }
     return values;
   }

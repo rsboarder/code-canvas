@@ -39,6 +39,7 @@ function createTileSetRecordArrays(capacity: number): TileSetRecordArrays {
 }
 
 export interface TileRecordSource {
+  readonly fileId: string;
   readonly filePath: string;
   readonly contentVersion: number;
   readonly highlighted: boolean;
@@ -58,6 +59,10 @@ export interface TileLabelSource {
 interface TileRecordPool {
   release(key: string): void;
   isPinned(key: string): boolean;
+}
+
+interface TileRecordCallbacks {
+  readonly onKeyReleased?: ((key: string) => void) | undefined;
 }
 
 export class TileRecords {
@@ -83,9 +88,12 @@ export class TileRecords {
 
   private headerHeight = 0;
 
+  private contentWidth = 0;
+
   constructor(
     private readonly pool: TileRecordPool,
     capacity: number,
+    private readonly callbacks: TileRecordCallbacks = {},
   ) {
     this.records = createTileSetRecordArrays(capacity);
     this.keys = new Array<string | undefined>(capacity);
@@ -99,6 +107,7 @@ export class TileRecords {
   setContentSource(source: TileRecordSource, epoch: number): void {
     const pathChanged = this.source?.filePath !== source.filePath;
     this.source = source;
+    this.contentWidth = source.contentWidth;
     this.epoch = epoch;
     if (pathChanged) {
       this.releaseStaleHeaders(source.filePath);
@@ -119,6 +128,15 @@ export class TileRecords {
 
   setHeaderHeight(height: number): void {
     this.headerHeight = height;
+  }
+
+  setContentWidth(width: number): void {
+    if (!this.source || this.contentWidth === width) return;
+    this.contentWidth = width;
+    for (let index = 0; index < this.records.active.length; index += 1) {
+      if (!this.records.active[index]) continue;
+      this.setRecordGeometry(index);
+    }
   }
 
   ensureRecord(
@@ -153,14 +171,7 @@ export class TileRecords {
     this.highlighted[slot] = source.highlighted ? 1 : 0;
     this.records.column[slot] = column;
     this.records.row[slot] = row;
-    this.setRecordGeometry({
-      slot,
-      kind,
-      rasterScale,
-      column,
-      row,
-      source,
-    });
+    this.setRecordGeometry(slot);
     this.records.ready[slot] = 0;
     this.pending[slot] = 0;
     this.requestedContentVersion[slot] = -1;
@@ -242,6 +253,8 @@ export class TileRecords {
   }
 
   deactivate(record: number): void {
+    const key = this.keys[record];
+    if (key) this.callbacks.onKeyReleased?.(key);
     this.records.active[record] = 0;
     this.records.ready[record] = 0;
     this.pending[record] = 0;
@@ -258,8 +271,13 @@ export class TileRecords {
     if (record >= 0) this.deactivate(record);
   }
 
-  private setRecordGeometry(input: RecordGeometryInput): void {
-    const { slot, kind, rasterScale, column, row, source } = input;
+  private setRecordGeometry(slot: number): void {
+    const source = this.source;
+    if (!source) return;
+    const kind = this.records.kind[slot] ?? CONTENT_KIND;
+    const rasterScale = this.records.rasterScale[slot] ?? 1;
+    const column = this.records.column[slot] ?? 0;
+    const row = this.records.row[slot] ?? 0;
     const size = tileContentSize(rasterScale);
     const label = kind === LABEL_KIND ? source.label : undefined;
     if (label) {
@@ -273,7 +291,7 @@ export class TileRecords {
     this.records.localY[slot] = row * size;
     this.records.width[slot] = Math.min(
       size,
-      source.contentWidth - column * size,
+      this.contentWidth - column * size,
     );
     this.records.height[slot] =
       kind === HEADER_KIND
@@ -288,26 +306,10 @@ export class TileRecords {
         this.records.kind[index] === LABEL_KIND &&
         this.labelIdentities[index] === source.label?.identity
       ) {
-        this.setRecordGeometry({
-          slot: index,
-          kind: LABEL_KIND,
-          rasterScale: this.records.rasterScale[index] ?? 1,
-          column: 0,
-          row: 0,
-          source,
-        });
+        this.setRecordGeometry(index);
       }
     }
   }
-}
-
-interface RecordGeometryInput {
-  readonly slot: number;
-  readonly kind: number;
-  readonly rasterScale: number;
-  readonly column: number;
-  readonly row: number;
-  readonly source: TileRecordSource;
 }
 
 function tilePrefix(kind: number): string {
@@ -321,9 +323,10 @@ function tileIdentity(
   source: TileRecordSource,
   epoch: number,
 ): number | string {
-  if (kind === HEADER_KIND) return source.filePath;
-  if (kind === LABEL_KIND) return source.label?.identity ?? source.filePath;
-  return epoch;
+  if (kind === HEADER_KIND) return `${source.fileId}:${source.filePath}`;
+  if (kind === LABEL_KIND)
+    return `${source.fileId}:${source.label?.identity ?? source.filePath}`;
+  return `${source.fileId}:${String(epoch)}`;
 }
 
 function headerPath(kind: number, filePath: string): string | undefined {

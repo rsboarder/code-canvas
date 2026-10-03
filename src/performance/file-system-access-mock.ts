@@ -1,76 +1,48 @@
 import type { PerfFile } from "./bridge";
 
-interface DirectoryNode {
-  readonly kind: "directory";
-  readonly children: Map<string, DirectoryNode | FileNode>;
+const DATASET_DIRECTORY = "reference-dataset";
+let directoryCounter = 0;
+
+interface DirectoryHandleWithEntries extends FileSystemDirectoryHandle {
+  entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
 }
 
-interface FileNode {
-  readonly kind: "file";
-  readonly text: string;
-}
-
-export function createInMemoryDirectory(
+export async function createReferenceDirectory(
   files: readonly PerfFile[],
-): FileSystemDirectoryHandle {
-  const root: DirectoryNode = { kind: "directory", children: new Map() };
-  for (const file of files) addFile(root, file);
-  return toDirectoryHandle(root);
+): Promise<FileSystemDirectoryHandle> {
+  const opfs = await navigator.storage.getDirectory();
+  await removeExistingDatasets(opfs);
+  const directoryName = `${DATASET_DIRECTORY}-${String(directoryCounter++)}`;
+  const directory = await opfs.getDirectoryHandle(directoryName, {
+    create: true,
+  });
+  for (const file of files) await writeFile(directory, file);
+  return directory;
 }
 
-function addFile(root: DirectoryNode, file: PerfFile): void {
+async function removeExistingDatasets(
+  opfs: FileSystemDirectoryHandle,
+): Promise<void> {
+  const directory = opfs as unknown as DirectoryHandleWithEntries;
+  for await (const [name] of directory.entries()) {
+    if (!name.startsWith(DATASET_DIRECTORY)) continue;
+    await opfs.removeEntry(name, { recursive: true });
+  }
+}
+
+async function writeFile(
+  root: FileSystemDirectoryHandle,
+  file: PerfFile,
+): Promise<void> {
   const parts = file.path.split("/").filter(Boolean);
   const fileName = parts.pop();
   if (!fileName) return;
   let directory = root;
   for (const part of parts) {
-    const child = directory.children.get(part);
-    if (child?.kind === "file") return;
-    if (child) {
-      directory = child;
-      continue;
-    }
-    const created: DirectoryNode = {
-      kind: "directory",
-      children: new Map(),
-    };
-    directory.children.set(part, created);
-    directory = created;
+    directory = await directory.getDirectoryHandle(part, { create: true });
   }
-  directory.children.set(fileName, { kind: "file", text: file.text });
-}
-
-function toDirectoryHandle(node: DirectoryNode): FileSystemDirectoryHandle {
-  const handle = {
-    kind: node.kind,
-    entries: async function* (): AsyncIterableIterator<
-      [string, FileSystemHandle]
-    > {
-      await Promise.resolve();
-      for (const [name, child] of node.children) {
-        yield [
-          name,
-          child.kind === "directory"
-            ? toDirectoryHandle(child)
-            : toFileHandle(child),
-        ];
-      }
-    },
-  };
-  return handle as unknown as FileSystemDirectoryHandle;
-}
-
-function toFileHandle(node: FileNode): FileSystemFileHandle {
-  return {
-    kind: node.kind,
-    getFile: async () => {
-      await Promise.resolve();
-      return {
-        text: async () => {
-          await Promise.resolve();
-          return node.text;
-        },
-      } as File;
-    },
-  } as unknown as FileSystemFileHandle;
+  const handle = await directory.getFileHandle(fileName, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(file.text);
+  await writable.close();
 }

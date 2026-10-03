@@ -10,8 +10,10 @@ function metrics(): FrameDrawMetrics {
   return {
     tileMemoryBytes: 0,
     missingTile: false,
+    visibleWidgetCount: 0,
     drawnTileCount: 0,
     drawnLabelTileCount: 0,
+    drawnMinimapCount: 0,
     drawnFallbackTileCount: 0,
     drawnUnhighlightedTileCount: 0,
     lowestEpochDrawn: -1,
@@ -23,8 +25,10 @@ function metrics(): FrameDrawMetrics {
 describe("frame draw metrics", () => {
   it("resets the per-frame draw counts and lowest values", () => {
     const value = metrics();
+    value.visibleWidgetCount = 3;
     value.drawnTileCount = 4;
     value.drawnLabelTileCount = 2;
+    value.drawnMinimapCount = 5;
     value.drawnFallbackTileCount = 2;
     value.drawnUnhighlightedTileCount = 3;
     value.lowestEpochDrawn = 7;
@@ -32,6 +36,7 @@ describe("frame draw metrics", () => {
 
     resetFrameDrawMetrics(value);
 
+    expect(value.visibleWidgetCount).toBe(0);
     expect(value.drawnTileCount).toBe(0);
     expect(value.drawnLabelTileCount).toBe(0);
     expect(value.drawnFallbackTileCount).toBe(0);
@@ -71,5 +76,14 @@ describe("frame draw metrics", () => {
     expect(value.drawnUnhighlightedTileCount).toBe(1);
     expect(value.lowestEpochDrawn).toBe(2);
     expect(value.lowestContentVersion).toBe(3);
+  });
+
+  it("resets drawn minimap count", () => {
+    const value = metrics();
+    value.drawnMinimapCount = 5;
+
+    resetFrameDrawMetrics(value);
+
+    expect(value.drawnMinimapCount).toBe(0);
   });
 });

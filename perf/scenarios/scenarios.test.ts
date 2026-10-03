@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import largeEditScenario from "./large-edit";
 import panScenario from "./pan-whole-canvas";
+import { isEditorOnlyScenario } from "./schema";
 import densityScenario from "./worst-case-text-density";
 import manipulationScenario from "./drag-resize-scroll";
 import typingScenario from "./typing";
@@ -26,5 +28,12 @@ describe("fast performance scenarios", () => {
     );
 
     expect(plannedMs).toBeLessThanOrEqual(120_000);
+  });
+});
+
+describe("editor-only scenarios", () => {
+  it("only scenarios without pointer steps are editor-only", () => {
+    expect(isEditorOnlyScenario(largeEditScenario)).toBe(true);
+    expect(isEditorOnlyScenario(typingScenario)).toBe(false);
   });
 });

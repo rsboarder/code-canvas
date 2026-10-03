@@ -82,6 +82,7 @@ export class RasterWorkerPool {
       worker.terminate();
     });
     this.workers.length = 0;
+    for (const result of this.pending.drain()) result.bitmap.close();
     this.pending.clear();
   }
 

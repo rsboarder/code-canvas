@@ -1,0 +1,4 @@
+export const WIDGET_HEADER_COLOR = "#252526";
+export const WIDGET_FRAME_COLOR = "#454545";
+export const WIDGET_SCROLL_THUMB_COLOR = "#424242";
+export const WIDGET_SCROLL_GUTTER_WIDTH = 12;

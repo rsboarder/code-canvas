@@ -1,17 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  openReferenceFolder,
   previewArguments,
   previewUrl,
-  missingBridgeCommands,
-  prepareScenarioRun,
   runMeasuredScenarios,
-  waitForApplicationBridge,
   type HarnessResult,
   type RunnerFileSystem,
   type ScenarioRunnerDependencies,
 } from "./runner";
+import {
+  missingBridgeCommands,
+  openReferenceFolder,
+  prepareScenarioRun,
+  waitForApplicationBridge,
+} from "./run-preparation";
 import { evaluateSelfTest, SELF_TEST_CASE_NAMES } from "./self-test-evaluation";
 import type { Page } from "@playwright/test";
 import type { BudgetConfig } from "./report";

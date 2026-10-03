@@ -9,6 +9,11 @@ export type HarnessMode = "full" | "stages";
 export type HarnessVerdict = "passed" | "failed" | "invalid" | "stage-passed";
 export type ReportStatistic = number | "unavailable";
 
+interface ScenarioBudgetOverride {
+  readonly applicationTaskMs?: number;
+  readonly extraMissedFramesPerRun?: number;
+}
+
 export interface BudgetConfig {
   readonly warmupRuns: number;
   readonly measuredRuns: number;
@@ -16,6 +21,7 @@ export interface BudgetConfig {
   readonly longIntervalMs: number;
   readonly allowedRegression: number;
   readonly stageBudgets?: Readonly<Record<string, number>>;
+  readonly scenarioOverrides?: Readonly<Record<string, ScenarioBudgetOverride>>;
 }
 
 export interface GestureTiming {
@@ -67,6 +73,8 @@ export interface ScenarioRunMetrics {
   readonly tileMemoryMiB?: ReportStatistic;
   readonly missingTileFrameCount?: number;
   readonly timeToSharpMs?: ReportStatistic;
+  readonly textSwitchLagMs?: ReportStatistic;
+  readonly residencyBacklog?: ReportStatistic;
 }
 
 export interface ScenarioRun {
@@ -149,6 +157,7 @@ interface EvaluateScenarioOptions {
   readonly baseline?: Baseline;
   readonly durationMs: number;
   readonly stageTiming?: boolean;
+  readonly frameSamplesExpected?: boolean;
 }
 
 export function evaluateScenario({
@@ -159,15 +168,20 @@ export function evaluateScenario({
   baseline,
   durationMs,
   stageTiming = false,
+  frameSamplesExpected = true,
 }: EvaluateScenarioOptions): ScenarioEvaluation {
   if (runs.length === 0)
     throw new RangeError("a scenario needs a measured run");
+  const scenarioOverride = budgets.scenarioOverrides?.[scenario];
   const evaluations = runs.map((run) => ({
     run,
     assessment: violationsForRun({
       run,
       budgets,
       stageTiming,
+      frameSamplesExpected,
+      applicationTaskMs:
+        scenarioOverride?.applicationTaskMs ?? budgets.applicationTaskMs,
     }),
   }));
   const worst = evaluations.reduce((current, candidate) =>
@@ -180,7 +194,12 @@ export function evaluateScenario({
   );
   const floorRelativeMetrics = stageTiming
     ? []
-    : evaluateFloorMetrics(runs, noiseFloor, durationMs);
+    : evaluateFloorMetrics(
+        runs,
+        noiseFloor,
+        durationMs,
+        scenarioOverride?.extraMissedFramesPerRun ?? 0,
+      );
   const floorViolations = floorRelativeMetrics
     .filter((metric) => metric.fails)
     .map((metric) => ({
@@ -220,6 +239,7 @@ function evaluateFloorMetrics(
   runs: readonly ScenarioRun[],
   noiseFloor: NoiseFloor,
   durationMs: number,
+  extraAllowancePerRun: number,
 ): FloorRelativeMetric[] {
   const metrics = [
     {
@@ -239,7 +259,12 @@ function evaluateFloorMetrics(
     },
   ];
   return metrics.map(({ metric, floorPerMinute, values }) => {
-    const verdict = evaluateFloorMetric(values, floorPerMinute, durationMs);
+    const verdict = evaluateFloorMetric(
+      values,
+      floorPerMinute,
+      durationMs,
+      extraAllowancePerRun,
+    );
     return {
       metric,
       allowancePerRun: verdict.allowancePerRun,
@@ -294,8 +319,11 @@ function violationsForRun(options: {
   readonly run: ScenarioRun;
   readonly budgets: BudgetConfig;
   readonly stageTiming: boolean;
+  readonly frameSamplesExpected: boolean;
+  readonly applicationTaskMs: number;
 }): RunAssessment {
-  const { run, budgets, stageTiming } = options;
+  const { run, budgets, stageTiming, frameSamplesExpected, applicationTaskMs } =
+    options;
   const violations: Violation[] = [];
   const unavailableMetrics: string[] = [];
   if (
@@ -303,11 +331,14 @@ function violationsForRun(options: {
       violations,
       "applicationTaskMs",
       run.metrics.applicationTaskMs,
-      budgets.applicationTaskMs,
+      applicationTaskMs,
     )
   )
     unavailableMetrics.push("applicationTaskMs");
-  if (stageTiming)
+  if (
+    stageTiming &&
+    (frameSamplesExpected || Object.keys(run.metrics.stages ?? {}).length > 0)
+  )
     addStageViolations(
       violations,
       unavailableMetrics,
@@ -410,12 +441,12 @@ export function renderMarkdownReport(report: HarnessReport): string {
   ];
   if (!report.frameMeasurement)
     lines.push(
-      "Stage-specific numeric budgets were not specified; stage mode checks the 8 ms application-task budget only.",
+      "Stage-specific numeric budgets were not specified; stage mode checks the application-task budget only (budgets.json, including per-scenario overrides).",
       "",
     );
   lines.push(
-    "| Scenario | Verdict | Worst application task (ms) | p99 (ms) | Dropped/partial over floor | Long intervals over floor | Tile memory (bytes) | Tile memory (MiB) | Missing-tile frames | Time to sharp (ms) | Delta |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Scenario | Verdict | Worst application task (ms) | p99 (ms) | Dropped/partial over floor | Long intervals over floor | Tile memory (bytes) | Tile memory (MiB) | Missing-tile frames | Time to sharp (ms) | Switch to Text lag (ms) | Residency backlog (max) | Delta |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
   );
   for (const scenario of report.scenarios) {
     const metrics = scenario.worstRun.metrics;
@@ -424,7 +455,7 @@ export function renderMarkdownReport(report: HarnessReport): string {
         ? "no baseline"
         : `${String(scenario.regressions.length)} regression(s)`;
     lines.push(
-      `| ${scenario.scenario} | ${scenario.verdict} | ${value(metrics.applicationTaskMs)} | ${value(metrics.p99)} | ${floorMetricValue(scenario, "droppedOrPartiallyPresentedFrames")} | ${floorMetricValue(scenario, "longIntervals")} | ${value(metrics.tileMemoryBytes ?? "unavailable")} | ${value(tileMemoryMiB(metrics))} | ${String(metrics.missingTileFrameCount ?? 0)} | ${value(metrics.timeToSharpMs ?? "unavailable")} | ${delta} |`,
+      `| ${scenario.scenario} | ${scenario.verdict} | ${value(metrics.applicationTaskMs)} | ${value(metrics.p99)} | ${floorMetricValue(scenario, "droppedOrPartiallyPresentedFrames")} | ${floorMetricValue(scenario, "longIntervals")} | ${value(metrics.tileMemoryBytes ?? "unavailable")} | ${value(tileMemoryMiB(metrics))} | ${String(metrics.missingTileFrameCount ?? 0)} | ${value(metrics.timeToSharpMs ?? "unavailable")} | ${value(metrics.textSwitchLagMs ?? "unavailable")} | ${value(metrics.residencyBacklog ?? "unavailable")} | ${delta} |`,
     );
   }
   if (report.frameMeasurement) appendRunTable(lines, report.scenarios);

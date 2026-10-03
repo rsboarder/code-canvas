@@ -89,7 +89,7 @@ describe("performance harness build boundary", () => {
     expect(regularBundle.text).not.toContain("__perf");
     expect(regularBundle.text).not.toContain("__codeCanvasTest");
     expect(regularBundle.text).not.toContain("setSyntheticLoad");
-    expect(regularBundle.text).not.toContain("setCamera");
+    expect(regularBundle.text).not.toContain("resetCameraRange");
     expect(regularBundle.text).not.toContain("synthetic-load");
     expect(regularBundle.text).not.toContain("syntheticGpuLoadIterations");
     expect(
@@ -112,6 +112,7 @@ describe("performance harness build boundary", () => {
     expect(harnessBundle.text).toContain("__perf");
     expect(harnessBundle.text).toContain("setSyntheticLoad");
     expect(harnessBundle.text).toContain("setCamera");
+    expect(harnessBundle.text).toContain("resetCameraRange");
     expect(harnessBundle.text).toContain("synthetic-load");
     expect(harnessBundle.text).toContain("syntheticGpuLoadIterations");
     expect(

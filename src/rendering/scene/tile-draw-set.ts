@@ -159,7 +159,7 @@ export class TileDrawSet {
   ): void {
     const extentHeight =
       kind === HEADER_KIND ? this.headerHeight : this.contentHeight;
-    if (extentHeight <= 0) return;
+    if (kind !== LABEL_KIND && extentHeight <= 0) return;
     this.coverageKind = kind;
     this.setCoverageWindow(
       this.visibleLeft,

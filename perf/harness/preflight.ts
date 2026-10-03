@@ -1,5 +1,6 @@
 import type { Browser, CDPSession, Page } from "@playwright/test";
 
+import { classifyTrace, type TraceEvents, type TraceMetrics } from "./trace";
 import {
   REFERENCE_THRESHOLDS,
   type EnvironmentReport,
@@ -40,12 +41,22 @@ export interface NoiseFloor {
   intervalsOver12_5MsPerMinute: number;
 }
 
+interface InvalidNoiseFloor {
+  readonly valid: false;
+  readonly reason: string;
+  readonly detail?: string;
+}
+
+export type NoiseFloorClassification = NoiseFloor | InvalidNoiseFloor;
+
 export type TraceRecorder = (
   cdp: CDPSession,
   action: () => Promise<void>,
 ) => Promise<unknown>;
 
-export type NoiseFloorClassifier = (trace: unknown) => NoiseFloor;
+export type NoiseFloorClassifier = (
+  trace: unknown,
+) => NoiseFloorClassification | Promise<NoiseFloorClassification>;
 
 interface NoiseFloorOptions {
   page: Page;
@@ -245,25 +256,65 @@ const redrawBlankPage = async (
   page: Page,
   durationMs: number,
 ): Promise<void> => {
-  await page.evaluate((duration) => {
+  await page.evaluate(async (duration) => {
     const canvas = document.createElement("canvas");
-    canvas.width = 1;
-    canvas.height = 1;
-    const context = canvas.getContext("2d");
-    const started = performance.now();
-    return new Promise<void>((resolve) => {
-      const frame = (): void => {
-        context?.fillRect(0, 0, 1, 1);
-        if (performance.now() - started >= duration) {
-          resolve();
-          return;
-        }
+    canvas.width = 16;
+    canvas.height = 16;
+    canvas.style.position = "fixed";
+    canvas.style.top = "0";
+    canvas.style.left = "0";
+    canvas.style.width = "16px";
+    canvas.style.height = "16px";
+    canvas.style.zIndex = "2147483647";
+    document.body.append(canvas);
+    try {
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("blank page canvas context unavailable");
+      const started = performance.now();
+      let frameNumber = 0;
+      await new Promise<void>((resolve, reject) => {
+        const frame = (): void => {
+          try {
+            context.fillStyle = `hsl(${String(frameNumber * 37)}, 100%, 50%)`;
+            context.fillRect(0, 0, 16, 16);
+            frameNumber += 1;
+            if (performance.now() - started >= duration) {
+              resolve();
+              return;
+            }
+            requestAnimationFrame(frame);
+          } catch (error: unknown) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        };
         requestAnimationFrame(frame);
-      };
-      requestAnimationFrame(frame);
-    });
+      });
+    } finally {
+      canvas.remove();
+    }
   }, durationMs);
 };
+
+export async function classifyNoiseFloor(
+  value: unknown,
+): Promise<NoiseFloorClassification> {
+  if (isNoiseFloor(value)) return value;
+  const classification =
+    isTraceMetrics(value) || isInvalidNoiseFloor(value)
+      ? value
+      : await classifyTrace(value as TraceEvents);
+  if (!classification.valid) return classification;
+  if (typeof classification.intervalsOver12_5Ms !== "number")
+    return {
+      valid: false,
+      reason: "noise-floor-intervals-unavailable",
+    };
+  return {
+    droppedFramesPerMinute: classification.frames.dropped,
+    partiallyPresentedFramesPerMinute: classification.frames.partiallyPresented,
+    intervalsOver12_5MsPerMinute: classification.intervalsOver12_5Ms,
+  };
+}
 
 export const measureNoiseFloor = async ({
   page,
@@ -271,7 +322,38 @@ export const measureNoiseFloor = async ({
   durationMs,
   recordTrace,
   classifyTrace,
-}: NoiseFloorOptions): Promise<NoiseFloor> => {
+}: NoiseFloorOptions): Promise<NoiseFloorClassification> => {
   const trace = await recordTrace(cdp, () => redrawBlankPage(page, durationMs));
   return classifyTrace(trace);
 };
+
+function isNoiseFloor(value: unknown): value is NoiseFloor {
+  return (
+    isRecord(value) &&
+    typeof value.droppedFramesPerMinute === "number" &&
+    typeof value.partiallyPresentedFramesPerMinute === "number" &&
+    typeof value.intervalsOver12_5MsPerMinute === "number"
+  );
+}
+
+function isTraceMetrics(value: unknown): value is TraceMetrics {
+  return (
+    isRecord(value) &&
+    value.valid === true &&
+    isRecord(value.frames) &&
+    typeof value.frames.dropped === "number" &&
+    typeof value.frames.partiallyPresented === "number" &&
+    (typeof value.intervalsOver12_5Ms === "number" ||
+      value.intervalsOver12_5Ms === "unavailable")
+  );
+}
+
+function isInvalidNoiseFloor(value: unknown): value is InvalidNoiseFloor {
+  return (
+    isRecord(value) && value.valid === false && typeof value.reason === "string"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}

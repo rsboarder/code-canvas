@@ -69,7 +69,7 @@ The hot path is everything that runs every frame or on every input event: `rende
 ## Tests
 
 - Test behavior (state, flag, the fact of a call, pixels), not message text.
-- Domain and application layer — Vitest; spec scenarios — Playwright e2e; frame-budget scenarios — the `perf/` harness.
+- Vitest only for logic with non-obvious rules that runs without a browser: domain invariants and modules such as the tokenization engine, `DocumentResidency`, ranking and hit-test. Wiring around workers, timers, storage, the DOM and the GPU gets no unit test of its own; the e2e scenarios cover it. A task in `tasks.md` that names a unit test still gets that test. Spec scenarios — Playwright e2e; frame-budget scenarios — the `perf/` harness.
 - Test a module through its interface. Ports exist only where two adapters exist (`DirectoryReader`/`FileWriter`, `Tokenizer`, `EditorHost`, `GpuUploader`); use their fakes. IndexedDB stores are tested against `fake-indexeddb`, not behind a new port.
 - An e2e test or harness scenario is named exactly like the `#### Scenario:` in the spec.
 - A failing test is a specification of missing behavior. Do not weaken the assertion to make it pass.

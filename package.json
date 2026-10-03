@@ -48,6 +48,7 @@
     "eslint-import-resolver-typescript": "^4.4.4",
     "eslint-plugin-boundaries": "^7.1.0",
     "eslint-plugin-import-x": "^4.16.1",
+    "fake-indexeddb": "^6.2.5",
     "knip": "^5.82.1",
     "lint-staged": "^16.2.1",
     "prettier": "^3.8.1",

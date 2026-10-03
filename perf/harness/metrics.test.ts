@@ -20,6 +20,7 @@ describe("bridge metrics", () => {
       tileMemoryBytes: 7,
       missingTileFrameCount: 8,
       timeToSharpMs: 9,
+      textSwitchLagMs: "unavailable",
     });
     expect(collectBridgeMetrics({ snapshot: () => snapshot } as never)).toEqual(
       bridgeMetricsFromSnapshot(snapshot),

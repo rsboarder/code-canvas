@@ -18,6 +18,7 @@ export interface BridgeMetrics {
   readonly tileMemoryBytes?: Statistic;
   readonly missingTileFrameCount?: number;
   readonly timeToSharpMs?: Statistic;
+  readonly textSwitchLagMs?: Statistic;
 }
 
 export function collectBridgeMetrics(bridge: PerfBridge): BridgeMetrics {
@@ -35,6 +36,7 @@ export function bridgeMetricsFromSnapshot(snapshot: unknown): BridgeMetrics {
     tileMemoryBytes: readStatistic(snapshot.tileMemoryBytes),
     missingTileFrameCount: readCount(snapshot.missingTileFrameCount),
     timeToSharpMs: readStatistic(snapshot.timeToSharpMs),
+    textSwitchLagMs: readStatistic(snapshot.textSwitchLagMs),
   };
 }
 
@@ -70,6 +72,7 @@ function unavailableMetrics(): BridgeMetrics {
     tileMemoryBytes: UNAVAILABLE,
     missingTileFrameCount: 0,
     timeToSharpMs: UNAVAILABLE,
+    textSwitchLagMs: UNAVAILABLE,
   };
 }
 

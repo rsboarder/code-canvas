@@ -4,6 +4,7 @@ interface FrameLogEntry {
   readonly missingTile: boolean;
   readonly drawnTileCount: number;
   readonly drawnLabelTileCount: number;
+  readonly drawnMinimapCount: number;
   readonly drawnFallbackTileCount: number;
   readonly drawnUnhighlightedTileCount: number;
   readonly lowestEpochDrawn: number;
@@ -21,6 +22,7 @@ interface FrameLogMetrics {
   readonly missingTile: boolean;
   readonly drawnTileCount: number;
   readonly drawnLabelTileCount: number;
+  readonly drawnMinimapCount: number;
   readonly drawnFallbackTileCount: number;
   readonly drawnUnhighlightedTileCount: number;
   readonly lowestEpochDrawn: number;
@@ -45,6 +47,7 @@ export class FrameLog {
   private readonly missingTile = new Uint8Array(CAPACITY);
   private readonly drawnTileCount = new Uint16Array(CAPACITY);
   private readonly drawnLabelTileCount = new Uint16Array(CAPACITY);
+  private readonly drawnMinimapCount = new Uint16Array(CAPACITY);
   private readonly drawnFallbackTileCount = new Uint16Array(CAPACITY);
   private readonly drawnUnhighlightedTileCount = new Uint16Array(CAPACITY);
   private readonly lowestEpochDrawn = new Int32Array(CAPACITY);
@@ -68,6 +71,7 @@ export class FrameLog {
     this.missingTile[index] = metrics.missingTile ? 1 : 0;
     this.drawnTileCount[index] = metrics.drawnTileCount;
     this.drawnLabelTileCount[index] = metrics.drawnLabelTileCount;
+    this.drawnMinimapCount[index] = metrics.drawnMinimapCount;
     this.drawnFallbackTileCount[index] = metrics.drawnFallbackTileCount;
     this.drawnUnhighlightedTileCount[index] =
       metrics.drawnUnhighlightedTileCount;
@@ -95,6 +99,7 @@ export class FrameLog {
         missingTile: this.missingTile[index] === 1,
         drawnTileCount: this.drawnTileCount[index] ?? 0,
         drawnLabelTileCount: this.drawnLabelTileCount[index] ?? 0,
+        drawnMinimapCount: this.drawnMinimapAt(index),
         drawnFallbackTileCount: this.drawnFallbackTileCount[index] ?? 0,
         drawnUnhighlightedTileCount:
           this.drawnUnhighlightedTileCount[index] ?? 0,
@@ -110,5 +115,9 @@ export class FrameLog {
       });
     }
     return entries;
+  }
+
+  private drawnMinimapAt(index: number): number {
+    return this.drawnMinimapCount[index] ?? 0;
   }
 }

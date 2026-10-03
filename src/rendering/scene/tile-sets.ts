@@ -1,11 +1,12 @@
 import { TILE_DEVICE_SIZE } from "./tile-plan";
 import { TileDrawSet } from "./tile-draw-set";
-import { LABEL_KIND, type TileSetRecordArrays } from "./tile-records";
+import {
+  CONTENT_KIND,
+  HEADER_KIND,
+  LABEL_KIND,
+  type TileSetRecordArrays,
+} from "./tile-records";
 
-export type { TileSetRecordArrays } from "./tile-records";
-
-const CONTENT_KIND = 0;
-const HEADER_KIND = 1;
 const MARGIN_RING_TILES = 1;
 
 export function coarseRasterScale(
@@ -13,6 +14,13 @@ export function coarseRasterScale(
   devicePixelRatio: number,
 ): number {
   return 2 ** Math.floor(Math.log2(zoom)) * devicePixelRatio;
+}
+
+export function previousPowerOfTwo(scale: number): number {
+  const lower = 2 ** Math.floor(Math.log2(scale));
+  return Math.abs(scale - lower) < Number.EPSILON * Math.max(1, scale)
+    ? lower / 2
+    : lower;
 }
 
 interface ZoomViewBoundsInput {
@@ -27,30 +35,24 @@ interface ZoomViewBoundsInput {
 }
 
 interface ZoomViewBounds {
-  readonly left: number;
-  readonly top: number;
-  readonly right: number;
-  readonly bottom: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
 }
 
-export function viewBoundsAtZoom(input: ZoomViewBoundsInput): ZoomViewBounds {
+export function viewBoundsAtZoom(
+  input: ZoomViewBoundsInput,
+  out: ZoomViewBounds,
+): void {
   const focusWorldX = (input.focusX - input.cameraOffsetX) / input.currentZoom;
   const focusWorldY = (input.focusY - input.cameraOffsetY) / input.currentZoom;
-  return {
-    left: focusWorldX - input.focusX / input.targetZoom,
-    top: focusWorldY - input.focusY / input.targetZoom,
-    right:
-      focusWorldX + (input.viewportWidth - input.focusX) / input.targetZoom,
-    bottom:
-      focusWorldY + (input.viewportHeight - input.focusY) / input.targetZoom,
-  };
-}
-
-export function previousPowerOfTwo(value: number): number {
-  const lower = 2 ** Math.floor(Math.log2(value));
-  return Math.abs(value - lower) < Number.EPSILON * Math.max(1, value)
-    ? lower / 2
-    : lower;
+  out.left = focusWorldX - input.focusX / input.targetZoom;
+  out.top = focusWorldY - input.focusY / input.targetZoom;
+  out.right =
+    focusWorldX + (input.viewportWidth - input.focusX) / input.targetZoom;
+  out.bottom =
+    focusWorldY + (input.viewportHeight - input.focusY) / input.targetZoom;
 }
 
 export class TileSetPlanner {
@@ -142,6 +144,8 @@ export class TileSetPlanner {
 
   private textWanted = false;
 
+  private labelActive = true;
+
   private prefetchLeft = 0;
 
   private prefetchTop = 0;
@@ -227,6 +231,10 @@ export class TileSetPlanner {
     this.textWanted = wanted;
   }
 
+  setLabelActive(active: boolean): void {
+    this.labelActive = active;
+  }
+
   prefetchScale(): number {
     return this.prefetchRasterScale;
   }
@@ -260,10 +268,22 @@ export class TileSetPlanner {
     this.drawSet.setRecordCount(recordCount);
     this.drawSet.setEpoch(this.requestedEpoch);
     this.drawSet.setAtRestScale(this.atRestScale);
-    if (this.visibleLastColumn < this.visibleFirstColumn) return;
-    if (this.visibleLastRow < this.visibleFirstRow) return;
-    this.buildRequests(size);
-    this.drawSet.build(CONTENT_KIND, size, this.drawFallback, this.drawCurrent);
+    const contentRangeEmpty =
+      this.contentWidth <= 0 ||
+      this.contentHeight <= 0 ||
+      this.visibleLastColumn < this.visibleFirstColumn ||
+      this.visibleLastRow < this.visibleFirstRow;
+    if (!contentRangeEmpty) {
+      this.buildRequests(size);
+      this.drawSet.build(
+        CONTENT_KIND,
+        size,
+        this.drawFallback,
+        this.drawCurrent,
+      );
+    }
+    this.buildHeaderRequests();
+    this.requestLabel = this.minimapActive && this.labelActive;
     this.drawSet.build(
       HEADER_KIND,
       TILE_DEVICE_SIZE / this.requestedHeaderScale,
@@ -360,13 +380,9 @@ export class TileSetPlanner {
       if (!this.minimapActive || this.textWanted)
         this.buildVisibleGestureRequests(size);
       if (!this.textWanted) this.buildPrefetchRequests(size);
-      this.buildHeaderRequests();
-      this.requestLabel = this.minimapActive;
       return;
     }
     if (this.minimapActive && !this.textWanted) {
-      this.buildHeaderRequests();
-      this.requestLabel = true;
       return;
     }
     const margin = MARGIN_RING_TILES;
@@ -395,8 +411,6 @@ export class TileSetPlanner {
           this.pushRequest(column, row);
       }
     }
-    this.buildHeaderRequests();
-    this.requestLabel = this.minimapActive;
   }
 
   private buildVisibleGestureRequests(size: number): void {

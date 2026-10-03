@@ -4,6 +4,7 @@ import {
   computeTilePoolCapacity,
   planVisibleTiles,
   rasterScaleFor,
+  tilePoolGrowthTarget,
   tileContentSize,
   TILE_DEVICE_SIZE,
 } from "./tile-plan";
@@ -106,5 +107,23 @@ describe("tile pool capacity", () => {
     const large = computeTilePoolCapacity(1920, 1080, 2);
     const small = computeTilePoolCapacity(800, 600, 1);
     expect(large).toBeGreaterThan(small);
+  });
+
+  it("does not grow when demand fits the current capacity", () => {
+    expect(tilePoolGrowthTarget(96, 96, 8, 256)).toBe(96);
+    expect(tilePoolGrowthTarget(95, 96, 8, 256)).toBe(96);
+  });
+
+  it("rounds growth up to whole columns with 1.25 headroom", () => {
+    expect(tilePoolGrowthTarget(100, 64, 1, 256)).toBe(125);
+    expect(tilePoolGrowthTarget(101, 64, 8, 256)).toBe(128);
+  });
+
+  it("caps growth at the largest whole-column capacity", () => {
+    expect(tilePoolGrowthTarget(100, 64, 8, 110)).toBe(104);
+  });
+
+  it("never returns a target below the current capacity", () => {
+    expect(tilePoolGrowthTarget(17, 16, 8, 9)).toBe(16);
   });
 });

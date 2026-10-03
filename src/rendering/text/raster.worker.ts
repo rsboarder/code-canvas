@@ -12,7 +12,6 @@ import type {
   RasterWorkerResponse,
 } from "./raster-job";
 import { configureCanvasFont, PROBE_CHARACTER } from "./text-metrics";
-import { TILE_DEVICE_SIZE } from "../scene/tile-plan";
 
 const workerGlobal = self as unknown as {
   onmessage: ((event: MessageEvent<RasterWorkerRequest>) => void) | null;
@@ -51,11 +50,11 @@ function drawCells(
 
 async function rasterTile(request: RasterWorkerRequest): Promise<void> {
   const { job } = request;
-  const canvas = new OffscreenCanvas(TILE_DEVICE_SIZE, TILE_DEVICE_SIZE);
+  const canvas = new OffscreenCanvas(job.width, job.height);
   const context = canvas.getContext("2d");
   if (!context) return;
   context.fillStyle = job.backgroundColor;
-  context.fillRect(0, 0, TILE_DEVICE_SIZE, TILE_DEVICE_SIZE);
+  context.fillRect(0, 0, job.width, job.height);
   context.scale(job.rasterScale, job.rasterScale);
   drawCells(context, request);
   const bitmap = await createImageBitmap(canvas);
