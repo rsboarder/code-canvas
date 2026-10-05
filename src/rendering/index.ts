@@ -1,4 +1,5 @@
 export { FrameLoop } from "./frame-loop";
+export type { GesturePhase } from "../shared/frame";
 export { worldToClip } from "./clip-transform";
 export type { ClipPoint, WorldToClipInput } from "./clip-transform";
 export { minimapUvY } from "./minimap-uv";

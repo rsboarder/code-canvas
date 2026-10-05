@@ -83,8 +83,27 @@ iterating with `SPIKE_IDLE_SECONDS`, `SPIKE_TRACE_SECONDS`, `SPIKE_ATTRIBUTION_S
 | Longest application task | 10.184 ms | lead's attribution trace; deliberate 10 ms busy loop |
 | Browser tasks | 4760 before parent correction; 4707 leaf tasks after correction | lead result and offline corrected attribution |
 | Longest browser task | 1.494 ms | offline corrected attribution; 50 parent `RunTask`s excluded |
-| Resize/fullscreen before and after | not measured — needs manual reference-MacBook run | manual checklist |
+| Resize/fullscreen before and after | 120.0 Hz, p99 9.3 ms, 0 intervals > 12.5 ms in every state | 2026-10-04 headed run, see "Window states" below |
 | Low Power Mode off/on | not measured — needs manual reference-MacBook run | manual checklist |
+
+## Window states (2026-10-04)
+
+Headed Chrome 154.0.8037.97 from Playwright (`channel: "chrome"`), built-in display, DPR 2, screen 1800 × 1169 CSS px,
+AC power, Low Power Mode off. An unloaded page logged `requestAnimationFrame` intervals for 10 s in each window state,
+after a 2 s settle (4 s after entering fullscreen); the state was set through CDP `Browser.setWindowBounds` in the order
+of the table, so each row is also "after" the previous transition.
+
+| Window state | Viewport (CSS px) | Samples | p50 ms | p95 ms | p99 ms | max ms | Rate Hz | > 12.5 ms |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Normal 1200 × 800 | 1200 × 713 | 1200 | 8.3 | 9.2 | 9.3 | 9.5 | 120.00 | 0 |
+| Resized to 800 × 600 | 800 × 513 | 1200 | 8.3 | 9.3 | 9.4 | 9.4 | 120.00 | 0 |
+| Resized to 1600 × 1000 | 1600 × 913 | 1201 | 8.3 | 9.2 | 9.3 | 9.4 | 120.00 | 0 |
+| Maximized | 1800 × 986 | 1201 | 8.3 | 9.2 | 9.3 | 9.4 | 120.00 | 0 |
+| Fullscreen | 1800 × 1042 | 1200 | 8.3 | 9.1 | 9.3 | 9.4 | 120.00 | 0 |
+| After leaving fullscreen (macOS restores maximized) | 1800 × 986 | 1200 | 8.3 | 9.2 | 9.3 | 9.4 | 119.99 | 0 |
+
+No window state or transition needs a trigger to reach 120 Hz. Low Power Mode on was not measured: switching it needs
+the human.
 
 ## Manual steps
 
@@ -107,10 +126,10 @@ iterating with `SPIKE_IDLE_SECONDS`, `SPIKE_TRACE_SECONDS`, `SPIKE_ATTRIBUTION_S
 ## Verdict
 
 **Pending human acceptance items.** The lead's idle run reached 120.48 Hz with no long rAF
-intervals, so 120 Hz is attainable in the stated non-fullscreen Chrome 154 condition. Resize and
-fullscreen transitions, Low Power Mode, a DevTools-panel comparison, and real-trackpad behavior
-remain unverified; no trigger or criterion revision is justified until those measurements are
-recorded.
+intervals, so 120 Hz is attainable in the stated non-fullscreen Chrome 154 condition. Window resizes,
+maximized and fullscreen, and leaving fullscreen all hold 120 Hz with no trigger (2026-10-04, "Window
+states"). Low Power Mode, a DevTools-panel comparison, and real-trackpad behavior remain unverified; no
+trigger or criterion revision is justified until those measurements are recorded.
 
 ## Proposed design impact
 

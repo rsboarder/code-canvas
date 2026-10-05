@@ -18,6 +18,11 @@ function stubPerformanceNow(values: number[]) {
     .mockImplementation(() => values.shift() ?? 0);
 }
 
+function recordStage(order: string[], name: string): boolean {
+  order.push(name);
+  return false;
+}
+
 describe("FrameLoop", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -32,8 +37,8 @@ describe("FrameLoop", () => {
     const order: string[] = [];
     const samples: FrameSample[] = [];
     const stages: FrameStage[] = [
-      { name: "input", run: () => order.push("input") },
-      { name: "draw", run: () => order.push("draw") },
+      { name: "input", run: () => recordStage(order, "input") },
+      { name: "draw", run: () => recordStage(order, "draw") },
     ];
     const loop = new FrameLoop(stages, (sample) => {
       samples.push({
@@ -70,7 +75,7 @@ describe("FrameLoop", () => {
   it("does not run a frame at rest, and keeps running during a gesture", () => {
     const callbacks = stubAnimationFrame();
     vi.spyOn(performance, "now").mockReturnValue(1);
-    const run = vi.fn();
+    const run = vi.fn(() => false);
     const samples: FrameSample[] = [];
     const loop = new FrameLoop([{ name: "draw", run }], (sample) =>
       samples.push(sample),
@@ -113,6 +118,7 @@ describe("FrameLoop metrics", () => {
                 missingTile: true,
                 timeToSharpMs: 12,
               });
+            return false;
           },
         },
       ],
@@ -152,6 +158,7 @@ describe("FrameLoop sample state", () => {
           run: () => {
             tick += 1;
             if (tick === 1) loop.setSampleState("minimap", 3, 7);
+            return false;
           },
         },
       ],
@@ -194,6 +201,7 @@ describe("FrameLoop sample state", () => {
           run: () => {
             tick += 1;
             if (tick === 1) loop.setSampleState("minimap", 3, 7, true);
+            return false;
           },
         },
       ],
@@ -217,8 +225,9 @@ describe("FrameLoop liveness", () => {
     const drain = vi.fn(() => {
       if (uploaded) {
         uploaded = false;
-        loop.invalidate();
+        return true;
       }
+      return false;
     });
     const loop = new FrameLoop([{ name: "residency-drain", run: drain }]);
 
@@ -235,7 +244,7 @@ describe("FrameLoop liveness", () => {
   it("does not schedule a tick at rest without an upload", () => {
     const callbacks = stubAnimationFrame();
     vi.spyOn(performance, "now").mockReturnValue(1);
-    const drain = vi.fn();
+    const drain = vi.fn(() => false);
     const loop = new FrameLoop([{ name: "residency-drain", run: drain }]);
 
     loop.invalidate();
@@ -251,8 +260,9 @@ describe("FrameLoop idle samples", () => {
     const callbacks = stubAnimationFrame();
     vi.spyOn(performance, "now").mockReturnValue(1);
     const samples: FrameSample[] = [];
-    const loop = new FrameLoop([{ name: "draw", run: vi.fn() }], (sample) =>
-      samples.push({ ...sample }),
+    const loop = new FrameLoop(
+      [{ name: "draw", run: vi.fn(() => false) }],
+      (sample) => samples.push({ ...sample }),
     );
 
     loop.invalidate();

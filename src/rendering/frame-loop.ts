@@ -54,15 +54,17 @@ export class FrameLoop {
     this.sample.tileMemoryBytes = Number.NaN;
     this.sample.missingTile = false;
     this.sample.timeToSharpMs = Number.NaN;
+    let stageNeedsAnotherTick = false;
     for (let index = 0; index < this.stages.length; index += 1) {
       const stage = this.stages[index];
       const timing = this.stageTimings[index];
       if (!stage || !timing) continue;
       const startedAt = performance.now();
-      stage.run();
+      if (stage.run()) stageNeedsAnotherTick = true;
       timing.durationMs = performance.now() - startedAt;
     }
     this.sampleSink?.(this.sample as FrameSample);
+    if (stageNeedsAnotherTick) this.invalidate();
     if (this.gesture) this.schedule();
     if (this.idle) this.afterIdle = true;
   };

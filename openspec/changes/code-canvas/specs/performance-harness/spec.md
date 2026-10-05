@@ -24,9 +24,8 @@ Before the scenarios, the harness SHALL verify that the measurement will be vali
 - the browser is not running in headless mode;
 - the browser's idle frame rate is at least 115 Hz;
 - none of the browser's launch flags disable vsync or the frame-rate cap;
-- the machine is running on AC power;
 - the session's noise floor (the "Noise floor" requirement of the `performance-budget` capability) does not exceed the threshold from the reference environment description.
-Environment parameters (machine model, Chrome version, display refresh rate, DPR, window size, power source) SHALL be recorded in the report.
+Environment parameters (machine model, Chrome version, display refresh rate, DPR, window size, power source) SHALL be recorded in the report. Battery power does not abort a run (user's decision, 2026-10-04): the idle frame rate check already catches the 60 Hz cap of Low Power Mode, and the power source stays in the report.
 
 #### Scenario: Headless run
 - **WHEN** the command is run in headless mode
@@ -35,10 +34,6 @@ Environment parameters (machine model, Chrome version, display refresh rate, DPR
 #### Scenario: 60 Hz display
 - **WHEN** the browser window is on a 60 Hz display
 - **THEN** the idle frame rate check fails, and the run is aborted with the measured rate reported
-
-#### Scenario: Running on battery
-- **WHEN** the machine is running on battery power
-- **THEN** the run is aborted with the reason stated
 
 #### Scenario: Noisy floor
 - **WHEN** the noise floor measurement taken before the scenarios exceeds the threshold

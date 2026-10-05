@@ -1,14 +1,15 @@
-import { TILE_DEVICE_SIZE } from "./tile-plan";
+import { MARGIN_RING_TILES, TILE_DEVICE_SIZE } from "../tile-plan";
 import { TileDrawSet } from "./tile-draw-set";
+import {
+  createWidgetTileFrameState,
+  type WidgetTileFrameState,
+} from "./frame-state";
 import {
   CONTENT_KIND,
   HEADER_KIND,
   LABEL_KIND,
   type TileSetRecordArrays,
 } from "./tile-records";
-
-const MARGIN_RING_TILES = 1;
-
 export function coarseRasterScale(
   zoom: number,
   devicePixelRatio: number,
@@ -16,43 +17,19 @@ export function coarseRasterScale(
   return 2 ** Math.floor(Math.log2(zoom)) * devicePixelRatio;
 }
 
+export function gestureStepRasterScale(
+  zoom: number,
+  devicePixelRatio: number,
+): number {
+  const step = Math.floor(2 * Math.log2(zoom) + 0.5 + Number.EPSILON);
+  return 2 ** (step / 2) * devicePixelRatio;
+}
+
 export function previousPowerOfTwo(scale: number): number {
   const lower = 2 ** Math.floor(Math.log2(scale));
   return Math.abs(scale - lower) < Number.EPSILON * Math.max(1, scale)
     ? lower / 2
     : lower;
-}
-
-interface ZoomViewBoundsInput {
-  readonly cameraOffsetX: number;
-  readonly cameraOffsetY: number;
-  readonly currentZoom: number;
-  readonly targetZoom: number;
-  readonly focusX: number;
-  readonly focusY: number;
-  readonly viewportWidth: number;
-  readonly viewportHeight: number;
-}
-
-interface ZoomViewBounds {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-}
-
-export function viewBoundsAtZoom(
-  input: ZoomViewBoundsInput,
-  out: ZoomViewBounds,
-): void {
-  const focusWorldX = (input.focusX - input.cameraOffsetX) / input.currentZoom;
-  const focusWorldY = (input.focusY - input.cameraOffsetY) / input.currentZoom;
-  out.left = focusWorldX - input.focusX / input.targetZoom;
-  out.top = focusWorldY - input.focusY / input.targetZoom;
-  out.right =
-    focusWorldX + (input.viewportWidth - input.focusX) / input.targetZoom;
-  out.bottom =
-    focusWorldY + (input.viewportHeight - input.focusY) / input.targetZoom;
 }
 
 export class TileSetPlanner {
@@ -66,35 +43,9 @@ export class TileSetPlanner {
 
   requestLabel = false;
 
-  readonly drawFallback: Int32Array;
-
-  readonly drawCurrent: Int32Array;
-
-  readonly drawHeaderFallback: Int32Array;
-
-  readonly drawHeaderCurrent: Int32Array;
-
-  readonly drawLabelFallback: Int32Array;
-
-  readonly drawLabelCurrent: Int32Array;
-
   requestCount = 0;
 
   requestHeaderCount = 0;
-
-  drawFallbackCount = 0;
-
-  drawCurrentCount = 0;
-
-  drawHeaderFallbackCount = 0;
-
-  drawHeaderCurrentCount = 0;
-
-  drawLabelFallbackCount = 0;
-
-  drawLabelCurrentCount = 0;
-
-  missingTile = false;
 
   requestedScale = 1;
 
@@ -102,39 +53,82 @@ export class TileSetPlanner {
 
   requestedLabelScale = 1;
 
-  atRestScale = 1;
+  get visibleFirstColumn(): number {
+    return this.frameState.visibleFirstColumn;
+  }
 
-  requestedEpoch = 0;
+  get visibleLastColumn(): number {
+    return this.frameState.visibleLastColumn;
+  }
 
-  visibleFirstColumn = 0;
+  get visibleFirstRow(): number {
+    return this.frameState.visibleFirstRow;
+  }
 
-  visibleLastColumn = -1;
+  get visibleLastRow(): number {
+    return this.frameState.visibleLastRow;
+  }
 
-  visibleFirstRow = 0;
+  get drawFallback(): Int32Array {
+    return this.drawSet.drawFallback;
+  }
 
-  visibleLastRow = -1;
+  get drawCurrent(): Int32Array {
+    return this.drawSet.drawCurrent;
+  }
+
+  get drawHeaderFallback(): Int32Array {
+    return this.drawSet.drawHeaderFallback;
+  }
+
+  get drawHeaderCurrent(): Int32Array {
+    return this.drawSet.drawHeaderCurrent;
+  }
+
+  get drawLabelFallback(): Int32Array {
+    return this.drawSet.drawLabelFallback;
+  }
+
+  get drawLabelCurrent(): Int32Array {
+    return this.drawSet.drawLabelCurrent;
+  }
+
+  get drawFallbackCount(): number {
+    return this.drawSet.drawFallbackCount;
+  }
+
+  get drawCurrentCount(): number {
+    return this.drawSet.drawCurrentCount;
+  }
+
+  get drawHeaderFallbackCount(): number {
+    return this.drawSet.drawHeaderFallbackCount;
+  }
+
+  get drawHeaderCurrentCount(): number {
+    return this.drawSet.drawHeaderCurrentCount;
+  }
+
+  get drawLabelFallbackCount(): number {
+    return this.drawSet.drawLabelFallbackCount;
+  }
+
+  get drawLabelCurrentCount(): number {
+    return this.drawSet.drawLabelCurrentCount;
+  }
+
+  get missingTile(): boolean {
+    return this.drawSet.missingTile;
+  }
 
   private readonly drawSet: TileDrawSet;
-
-  private contentWidth = 0;
-
-  private contentHeight = 0;
-
-  private visibleLeft = 0;
-
-  private visibleTop = 0;
-
-  private visibleRight = 0;
-
-  private visibleBottom = 0;
+  private readonly frameState: WidgetTileFrameState;
 
   private zoom = 1;
 
   private devicePixelRatio = 1;
 
-  private zoomGestureActive = false;
-
-  private epoch = 0;
+  private contentRequestedScale = 1;
 
   private prefetchActive = false;
 
@@ -154,41 +148,41 @@ export class TileSetPlanner {
 
   private prefetchBottom = 0;
 
-  constructor(records: TileSetRecordArrays, capacity: number) {
-    this.drawSet = new TileDrawSet(records, capacity);
-    this.drawFallback = this.drawSet.drawFallback;
-    this.drawCurrent = this.drawSet.drawCurrent;
-    this.drawHeaderFallback = this.drawSet.drawHeaderFallback;
-    this.drawHeaderCurrent = this.drawSet.drawHeaderCurrent;
-    this.drawLabelFallback = this.drawSet.drawLabelFallback;
-    this.drawLabelCurrent = this.drawSet.drawLabelCurrent;
+  constructor(
+    records: TileSetRecordArrays,
+    capacity: number,
+    frameState: WidgetTileFrameState = createWidgetTileFrameState(),
+  ) {
+    this.frameState = frameState;
+    this.drawSet = new TileDrawSet(records, capacity, this.frameState);
     this.requestColumns = new Int32Array(capacity);
     this.requestRows = new Int32Array(capacity);
     this.requestScales = new Float64Array(capacity);
     this.requestHeaderColumns = new Int32Array(capacity);
   }
 
+  // Kept for standalone planner tests; WidgetTiles.prepare writes frameState directly.
   setContentSize(width: number, height: number): void {
-    this.contentWidth = width;
-    this.contentHeight = height;
-    this.drawSet.setContentSize(width, height);
+    this.frameState.contentWidth = width;
+    this.frameState.contentHeight = height;
   }
 
+  // Kept for standalone planner tests; WidgetTiles.prepare writes frameState directly.
   setHeaderHeight(height: number): void {
-    this.drawSet.setHeaderHeight(height);
+    this.frameState.headerHeight = height;
   }
 
+  // Kept for standalone planner tests; WidgetTiles.prepare writes frameState directly.
   setVisibleBounds(
     left: number,
     top: number,
     right: number,
     bottom: number,
   ): void {
-    this.visibleLeft = left;
-    this.visibleTop = top;
-    this.visibleRight = right;
-    this.visibleBottom = bottom;
-    this.drawSet.setVisibleBounds(left, top, right, bottom);
+    this.frameState.visibleLeft = left;
+    this.frameState.visibleTop = top;
+    this.frameState.visibleRight = right;
+    this.frameState.visibleBottom = bottom;
   }
 
   setZoom(
@@ -198,21 +192,17 @@ export class TileSetPlanner {
   ): void {
     this.zoom = zoom;
     this.devicePixelRatio = devicePixelRatio;
-    this.zoomGestureActive = gestureActive;
+    this.frameState.zoomGestureActive = gestureActive;
   }
 
+  // Kept for standalone planner tests; WidgetTiles.prepare writes frameState directly.
   setEpoch(epoch: number): void {
-    this.epoch = epoch;
-    this.drawSet.setEpoch(epoch);
+    this.frameState.epoch = epoch;
   }
 
+  // Kept for standalone planner tests; WidgetTiles.prepare writes frameState directly.
   setAtRestScale(scale: number): void {
-    this.atRestScale = scale;
-    this.drawSet.setAtRestScale(scale);
-  }
-
-  setLabelIdentity(identity: string): void {
-    this.drawSet.setLabelIdentity(identity);
+    this.frameState.atRestScale = scale;
   }
 
   setPrefetchActive(active: boolean): void {
@@ -253,56 +243,38 @@ export class TileSetPlanner {
 
   build(recordCount: number): void {
     this.reset();
-    this.requestedScale = this.zoomGestureActive
+    this.requestedScale = this.frameState.zoomGestureActive
       ? coarseRasterScale(this.zoom, this.devicePixelRatio)
       : this.zoom * this.devicePixelRatio;
-    this.requestedHeaderScale = this.zoomGestureActive
+    this.contentRequestedScale = this.frameState.zoomGestureActive
+      ? gestureStepRasterScale(this.zoom, this.devicePixelRatio)
+      : this.requestedScale;
+    this.requestedHeaderScale = this.frameState.zoomGestureActive
       ? coarseRasterScale(this.zoom, this.devicePixelRatio)
       : this.zoom * this.devicePixelRatio;
-    this.requestedLabelScale = this.zoomGestureActive
+    this.requestedLabelScale = this.frameState.zoomGestureActive
       ? coarseRasterScale(this.zoom, this.devicePixelRatio)
       : this.zoom * this.devicePixelRatio;
-    this.requestedEpoch = this.epoch;
-    const size = TILE_DEVICE_SIZE / this.requestedScale;
+    const size = TILE_DEVICE_SIZE / this.contentRequestedScale;
     this.setVisibleRange(size);
-    this.drawSet.setRecordCount(recordCount);
-    this.drawSet.setEpoch(this.requestedEpoch);
-    this.drawSet.setAtRestScale(this.atRestScale);
+    this.frameState.recordCount = recordCount;
+    this.frameState.gestureTargetScale = this.zoom * this.devicePixelRatio;
     const contentRangeEmpty =
-      this.contentWidth <= 0 ||
-      this.contentHeight <= 0 ||
+      this.frameState.contentWidth <= 0 ||
+      this.frameState.contentHeight <= 0 ||
       this.visibleLastColumn < this.visibleFirstColumn ||
       this.visibleLastRow < this.visibleFirstRow;
     if (!contentRangeEmpty) {
       this.buildRequests(size);
-      this.drawSet.build(
-        CONTENT_KIND,
-        size,
-        this.drawFallback,
-        this.drawCurrent,
-      );
+      this.drawSet.build(CONTENT_KIND, size);
     }
     this.buildHeaderRequests();
     this.requestLabel = this.minimapActive && this.labelActive;
     this.drawSet.build(
       HEADER_KIND,
       TILE_DEVICE_SIZE / this.requestedHeaderScale,
-      this.drawHeaderFallback,
-      this.drawHeaderCurrent,
     );
-    this.drawSet.build(
-      LABEL_KIND,
-      TILE_DEVICE_SIZE / this.requestedLabelScale,
-      this.drawLabelFallback,
-      this.drawLabelCurrent,
-    );
-    this.drawFallbackCount = this.drawSet.drawFallbackCount;
-    this.drawCurrentCount = this.drawSet.drawCurrentCount;
-    this.drawHeaderFallbackCount = this.drawSet.drawHeaderFallbackCount;
-    this.drawHeaderCurrentCount = this.drawSet.drawHeaderCurrentCount;
-    this.drawLabelFallbackCount = this.drawSet.drawLabelFallbackCount;
-    this.drawLabelCurrentCount = this.drawSet.drawLabelCurrentCount;
-    this.missingTile = this.drawSet.missingTile;
+    this.drawSet.build(LABEL_KIND, TILE_DEVICE_SIZE / this.requestedLabelScale);
   }
 
   isRequested(
@@ -311,7 +283,7 @@ export class TileSetPlanner {
     row: number,
     epoch: number,
   ): boolean {
-    if (epoch !== this.requestedEpoch) return false;
+    if (epoch !== this.frameState.epoch) return false;
     for (let index = 0; index < this.requestCount; index += 1) {
       if (
         this.requestScales[index] === rasterScale &&
@@ -324,7 +296,7 @@ export class TileSetPlanner {
   }
 
   exactVisibleReady(): boolean {
-    return this.drawSet.exactVisibleReady(this.requestedScale);
+    return this.drawSet.exactVisibleReady(this.contentRequestedScale);
   }
 
   textReady(): boolean {
@@ -335,51 +307,50 @@ export class TileSetPlanner {
     this.requestCount = 0;
     this.requestHeaderCount = 0;
     this.requestLabel = false;
-    this.drawFallbackCount = 0;
-    this.drawCurrentCount = 0;
-    this.drawHeaderFallbackCount = 0;
-    this.drawHeaderCurrentCount = 0;
-    this.drawLabelFallbackCount = 0;
-    this.drawLabelCurrentCount = 0;
-    this.missingTile = false;
     this.drawSet.reset();
   }
 
   private setVisibleRange(size: number): void {
-    this.visibleFirstColumn = Math.max(0, Math.floor(this.visibleLeft / size));
-    this.visibleLastColumn = Math.min(
-      Math.max(0, Math.ceil(this.contentWidth / size) - 1),
+    this.frameState.visibleFirstColumn = Math.max(
+      0,
+      Math.floor(this.frameState.visibleLeft / size),
+    );
+    this.frameState.visibleLastColumn = Math.min(
+      Math.max(0, Math.ceil(this.frameState.contentWidth / size) - 1),
       Math.floor(
-        Math.max(this.visibleLeft, exclusiveEnd(this.visibleRight)) / size,
+        Math.max(
+          this.frameState.visibleLeft,
+          exclusiveEnd(this.frameState.visibleRight),
+        ) / size,
       ),
     );
-    this.visibleFirstRow = Math.max(0, Math.floor(this.visibleTop / size));
-    this.visibleLastRow = Math.min(
-      Math.max(0, Math.ceil(this.contentHeight / size) - 1),
-      Math.floor(
-        Math.max(this.visibleTop, exclusiveEnd(this.visibleBottom)) / size,
-      ),
+    this.frameState.visibleFirstRow = Math.max(
+      0,
+      Math.floor(this.frameState.visibleTop / size),
     );
-    this.drawSet.setVisibleRange(
-      this.visibleFirstColumn,
-      this.visibleLastColumn,
-      this.visibleFirstRow,
-      this.visibleLastRow,
+    this.frameState.visibleLastRow = Math.min(
+      Math.max(0, Math.ceil(this.frameState.contentHeight / size) - 1),
+      Math.floor(
+        Math.max(
+          this.frameState.visibleTop,
+          exclusiveEnd(this.frameState.visibleBottom),
+        ) / size,
+      ),
     );
   }
 
   private buildRequests(size: number): void {
     this.drawSet.setCoverageKind(CONTENT_KIND);
     this.setCoverageWindow(
-      this.visibleLeft,
-      this.visibleTop,
-      this.visibleRight,
-      this.visibleBottom,
+      this.frameState.visibleLeft,
+      this.frameState.visibleTop,
+      this.frameState.visibleRight,
+      this.frameState.visibleBottom,
     );
-    if (this.zoomGestureActive) {
+    if (this.frameState.zoomGestureActive) {
       if (!this.minimapActive || this.textWanted)
         this.buildVisibleGestureRequests(size);
-      if (!this.textWanted) this.buildPrefetchRequests(size);
+      if (!this.textWanted) this.buildPrefetchRequests();
       return;
     }
     if (this.minimapActive && !this.textWanted) {
@@ -388,12 +359,12 @@ export class TileSetPlanner {
     const margin = MARGIN_RING_TILES;
     const firstColumn = Math.max(0, this.visibleFirstColumn - margin);
     const lastColumn = Math.min(
-      Math.max(0, Math.ceil(this.contentWidth / size) - 1),
+      Math.max(0, Math.ceil(this.frameState.contentWidth / size) - 1),
       this.visibleLastColumn + margin,
     );
     const firstRow = Math.max(0, this.visibleFirstRow - margin);
     const lastRow = Math.min(
-      Math.max(0, Math.ceil(this.contentHeight / size) - 1),
+      Math.max(0, Math.ceil(this.frameState.contentHeight / size) - 1),
       this.visibleLastRow + margin,
     );
     for (let row = firstRow; row <= lastRow; row += 1) {
@@ -420,18 +391,26 @@ export class TileSetPlanner {
         column <= this.visibleLastColumn;
         column += 1
       ) {
-        if (!this.drawSet.isAreaCovered(column * size, row * size, size, size))
-          this.pushRequest(column, row);
+        if (
+          !this.drawSet.isGestureAreaCovered(
+            column * size,
+            row * size,
+            size,
+            size,
+          )
+        )
+          this.pushRequest(column, row, this.contentRequestedScale);
       }
     }
   }
 
-  private buildPrefetchRequests(size: number): void {
+  private buildPrefetchRequests(): void {
     if (!this.prefetchActive) return;
     const requestScale =
       this.prefetchRasterScale > 0
         ? this.prefetchRasterScale
         : this.requestedScale;
+    const size = TILE_DEVICE_SIZE / requestScale;
     this.setCoverageWindow(
       this.prefetchLeft,
       this.prefetchTop,
@@ -440,12 +419,12 @@ export class TileSetPlanner {
     );
     const firstColumn = Math.max(0, Math.floor(this.prefetchLeft / size));
     const lastColumn = Math.min(
-      Math.max(0, Math.ceil(this.contentWidth / size) - 1),
+      Math.max(0, Math.ceil(this.frameState.contentWidth / size) - 1),
       Math.floor(exclusiveEnd(this.prefetchRight) / size),
     );
     const firstRow = Math.max(0, Math.floor(this.prefetchTop / size));
     const lastRow = Math.min(
-      Math.max(0, Math.ceil(this.contentHeight / size) - 1),
+      Math.max(0, Math.ceil(this.frameState.contentHeight / size) - 1),
       Math.floor(exclusiveEnd(this.prefetchBottom) / size),
     );
     for (let row = firstRow; row <= lastRow; row += 1) {
@@ -455,10 +434,10 @@ export class TileSetPlanner {
       }
     }
     this.setCoverageWindow(
-      this.visibleLeft,
-      this.visibleTop,
-      this.visibleRight,
-      this.visibleBottom,
+      this.frameState.visibleLeft,
+      this.frameState.visibleTop,
+      this.frameState.visibleRight,
+      this.frameState.visibleBottom,
     );
   }
 

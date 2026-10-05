@@ -218,9 +218,6 @@ export const evaluatePreflight = (
       `idle frame rate is ${environment.idleRateHz.toFixed(2)} Hz; minimum is ${String(thresholds.minimumIdleRateHz)} Hz`,
     );
   }
-  if (environment.powerSource !== "ac") {
-    reasons.push("machine is not running on AC power");
-  }
   if (environment.lowPowerMode) reasons.push("Low Power Mode is on");
   return reasons.length === 0
     ? { valid: true, exitCode: 0, reasons }

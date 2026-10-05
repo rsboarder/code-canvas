@@ -2,7 +2,7 @@ export type DetailLevelName = "text" | "minimap";
 
 export interface FrameStage {
   readonly name: string;
-  run(): void;
+  run(): boolean;
 }
 
 export interface FrameStageTiming {

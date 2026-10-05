@@ -174,6 +174,10 @@ export class Board {
     return this.requireWidget(id).scrollBy(deltaY);
   }
 
+  setContentScroll(id: SourceFileId, value: number): number {
+    return this.requireWidget(id).scrollTo(value);
+  }
+
   bringToFront(id: SourceFileId): void {
     this.requireWidget(id);
     this.stack.bringToFront(id);

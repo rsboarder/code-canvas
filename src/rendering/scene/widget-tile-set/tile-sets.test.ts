@@ -2,26 +2,27 @@ import { describe, expect, it } from "vitest";
 
 import {
   TileSetPlanner,
+  TileRecords,
   coarseRasterScale,
-  viewBoundsAtZoom,
-} from "./tile-sets";
-import { computeTilePoolCapacity } from "./tile-plan";
+  gestureStepRasterScale,
+} from "./index";
+import { computeTilePoolCapacity } from "../tile-plan";
+import { viewBoundsAtZoom } from "../tile-view-window";
+
+class FakePool {
+  readonly released: string[] = [];
+
+  release(key: string): void {
+    this.released.push(key);
+  }
+
+  isPinned(): boolean {
+    return false;
+  }
+}
 
 function records(capacity = 32) {
-  return {
-    active: new Uint8Array(capacity),
-    ready: new Uint8Array(capacity),
-    kind: new Uint8Array(capacity),
-    rasterScale: new Float64Array(capacity),
-    epoch: new Int32Array(capacity),
-    contentVersion: new Int32Array(capacity),
-    column: new Int32Array(capacity),
-    row: new Int32Array(capacity),
-    localX: new Float64Array(capacity),
-    localY: new Float64Array(capacity),
-    width: new Float64Array(capacity),
-    height: new Float64Array(capacity),
-  };
+  return new TileRecords(new FakePool(), capacity).records;
 }
 
 function plannerWith(scale: number, epoch: number, column = 0, row = 0) {
@@ -89,15 +90,15 @@ describe("TileSetPlanner", () => {
   });
 
   it("does not request a zoom-in area already covered by a resident tile", () => {
-    const scale = coarseRasterScale(1.7, 1);
+    const scale = gestureStepRasterScale(1.7, 1);
     const { view, planner } = plannerWith(scale, 1);
     buildPlanner(planner, {
       contentWidth: 1024,
       contentHeight: 1024,
       visibleLeft: 0,
       visibleTop: 0,
-      visibleRight: 512,
-      visibleBottom: 512,
+      visibleRight: 256,
+      visibleBottom: 256,
       zoom: 1.7,
       devicePixelRatio: 1,
       gestureActive: true,
@@ -149,6 +150,76 @@ describe("TileSetPlanner", () => {
     expect(planner.requestCount).toBe(0);
     expect(planner.missingTile).toBe(false);
     expect(planner.textReady()).toBe(true);
+  });
+});
+
+describe("TileSetPlanner coverage clipping", () => {
+  it("does not draw a content tile entirely past the content bottom", () => {
+    const view = records();
+    view.active[0] = 1;
+    view.ready[0] = 1;
+    view.rasterScale[0] = 0.5;
+    view.epoch[0] = 1;
+    view.localY[0] = 100;
+    view.width[0] = 512;
+    view.height[0] = 20;
+    const planner = new TileSetPlanner(view, 32);
+    buildPlanner(planner, {
+      ...COMMON,
+      contentHeight: 100,
+      gestureActive: false,
+      recordCount: 1,
+    });
+    expect(planner.drawFallbackCount).toBe(0);
+  });
+
+  it("clips a header tile to the header extent", () => {
+    const view = records();
+    view.active[0] = 1;
+    view.ready[0] = 1;
+    view.kind[0] = 1;
+    view.rasterScale[0] = 0.5;
+    view.localY[0] = 42;
+    view.width[0] = 512;
+    view.height[0] = 20;
+    const planner = new TileSetPlanner(view, 32);
+    planner.setHeaderHeight(42);
+    buildPlanner(planner, { ...COMMON, gestureActive: false, recordCount: 1 });
+    expect(planner.drawHeaderFallbackCount).toBe(0);
+  });
+});
+
+describe("TileSetPlanner gesture requests", () => {
+  it("requests a visible cell when coarse coverage is too mismatched", () => {
+    const coarseScale = coarseRasterScale(1.7, 1);
+    const stepScale = gestureStepRasterScale(1.7, 1);
+    const { view, planner } = plannerWith(coarseScale, 1);
+    buildPlanner(planner, {
+      contentWidth: 1024,
+      contentHeight: 1024,
+      visibleLeft: 0,
+      visibleTop: 0,
+      visibleRight: 512,
+      visibleBottom: 512,
+      zoom: 1.7,
+      devicePixelRatio: 1,
+      gestureActive: true,
+      epoch: 1,
+      recordCount: 1,
+    });
+
+    expect(planner.isRequested(stepScale, 0, 0, 1)).toBe(true);
+    expect(planner.missingTile).toBe(false);
+    expect(view.rasterScale[0]).toBe(coarseScale);
+  });
+
+  it("chooses the nearest square-root-of-two gesture step", () => {
+    expect(gestureStepRasterScale(1, 2)).toBe(2);
+    expect(gestureStepRasterScale(Math.sqrt(Math.sqrt(2)), 1)).toBeCloseTo(
+      Math.sqrt(2),
+    );
+    expect(gestureStepRasterScale(1.3, 1)).toBeCloseTo(Math.sqrt(2));
+    expect(gestureStepRasterScale(1.7, 1)).toBe(2);
   });
 });
 
@@ -275,6 +346,61 @@ describe("TileSetPlanner label draw set", () => {
     expect(planner.drawHeaderFallbackCount).toBe(1);
     expect(planner.drawHeaderFallback[0]).toBe(0);
     expect(planner.drawHeaderCurrentCount).toBe(0);
+  });
+});
+
+describe("TileSetPlanner gesture draw set", () => {
+  it("draws the closer gesture-scale tile over the old at-rest tile", () => {
+    const view = records(4);
+    view.active[0] = 1;
+    view.ready[0] = 1;
+    view.rasterScale[0] = 1;
+    view.epoch[0] = 1;
+    view.width[0] = 512;
+    view.height[0] = 512;
+    view.active[1] = 1;
+    view.ready[1] = 1;
+    view.rasterScale[1] = gestureStepRasterScale(1.3, 1);
+    view.epoch[1] = 1;
+    view.width[1] = 512 / view.rasterScale[1];
+    view.height[1] = 512 / view.rasterScale[1];
+    const planner = new TileSetPlanner(view, 4);
+
+    buildPlanner(planner, {
+      contentWidth: 512,
+      contentHeight: 512,
+      visibleLeft: 0,
+      visibleTop: 0,
+      visibleRight: 256,
+      visibleBottom: 256,
+      zoom: 1.3,
+      devicePixelRatio: 1,
+      gestureActive: true,
+      epoch: 1,
+      recordCount: 2,
+    });
+
+    expect(
+      Array.from(planner.drawCurrent.slice(0, planner.drawCurrentCount)),
+    ).toEqual([0, 1]);
+
+    buildPlanner(planner, {
+      contentWidth: 512,
+      contentHeight: 512,
+      visibleLeft: 0,
+      visibleTop: 0,
+      visibleRight: 256,
+      visibleBottom: 256,
+      zoom: 1.3,
+      devicePixelRatio: 1,
+      gestureActive: false,
+      epoch: 1,
+      recordCount: 2,
+    });
+
+    expect(
+      Array.from(planner.drawCurrent.slice(0, planner.drawCurrentCount)),
+    ).toEqual([0]);
   });
 });
 
@@ -491,6 +617,64 @@ describe("TileSetPlanner fallback order", () => {
     expect(
       Array.from(planner.drawCurrent.slice(0, planner.drawCurrentCount)),
     ).toEqual([1]);
+  });
+});
+
+describe("TileSetPlanner ranking", () => {
+  it("ranks fallback records by epoch, at-rest scale, then raster scale", () => {
+    const view = records(8);
+    const recordData = [
+      { epoch: 1, scale: 2 },
+      { epoch: 2, scale: 1 },
+      { epoch: 2, scale: 1.5 },
+      { epoch: 1, scale: 0.5 },
+    ];
+    recordData.forEach(({ epoch, scale }, index) => {
+      view.active[index] = 1;
+      view.ready[index] = 1;
+      view.rasterScale[index] = scale;
+      view.epoch[index] = epoch;
+      view.localX[index] = index * 128;
+      view.width[index] = 128;
+      view.height[index] = 512;
+    });
+    const planner = new TileSetPlanner(view, 8);
+    planner.setAtRestScale(1);
+    buildPlanner(planner, {
+      ...COMMON,
+      epoch: 3,
+      gestureActive: false,
+      recordCount: 4,
+    });
+    expect(
+      Array.from(planner.drawFallback.slice(0, planner.drawFallbackCount)),
+    ).toEqual([3, 0, 2, 1]);
+  });
+
+  it("ranks current gesture records by closeness to the gesture target", () => {
+    const view = records(8);
+    const scales = [1, 2, 1.5];
+    scales.forEach((scale, index) => {
+      view.active[index] = 1;
+      view.ready[index] = 1;
+      view.rasterScale[index] = scale;
+      view.epoch[index] = 1;
+      view.width[index] = 512;
+      view.height[index] = 512;
+    });
+    const planner = new TileSetPlanner(view, 8);
+    planner.setAtRestScale(1);
+    buildPlanner(planner, {
+      ...COMMON,
+      visibleRight: 256,
+      visibleBottom: 256,
+      zoom: 1.7,
+      gestureActive: true,
+      recordCount: 3,
+    });
+    expect(
+      Array.from(planner.drawCurrent.slice(0, planner.drawCurrentCount)),
+    ).toEqual([0, 1, 2]);
   });
 });
 

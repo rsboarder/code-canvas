@@ -1,4 +1,8 @@
-import { tileContentSize, tileKeyFor } from "./tile-plan";
+import { tileContentSize, tileKeyFor } from "../tile-plan";
+import {
+  createWidgetTileFrameState,
+  type WidgetTileFrameState,
+} from "./frame-state";
 
 export const CONTENT_KIND = 0;
 export const HEADER_KIND = 1;
@@ -56,7 +60,7 @@ export interface TileLabelSource {
   readonly height: number;
 }
 
-interface TileRecordPool {
+export interface TileRecordPool {
   release(key: string): void;
   isPinned(key: string): boolean;
 }
@@ -84,15 +88,12 @@ export class TileRecords {
 
   private source: TileRecordSource | undefined;
 
-  private epoch = 0;
-
-  private headerHeight = 0;
-
   private contentWidth = 0;
 
   constructor(
     private readonly pool: TileRecordPool,
     capacity: number,
+    readonly frameState: WidgetTileFrameState = createWidgetTileFrameState(),
     private readonly callbacks: TileRecordCallbacks = {},
   ) {
     this.records = createTileSetRecordArrays(capacity);
@@ -104,11 +105,11 @@ export class TileRecords {
     this.highlighted = new Uint8Array(capacity);
   }
 
-  setContentSource(source: TileRecordSource, epoch: number): void {
+  setContentSource(source: TileRecordSource, epoch?: number): void {
     const pathChanged = this.source?.filePath !== source.filePath;
     this.source = source;
     this.contentWidth = source.contentWidth;
-    this.epoch = epoch;
+    if (epoch !== undefined) this.frameState.epoch = epoch;
     if (pathChanged) {
       this.releaseStaleHeaders(source.filePath);
       this.releaseStaleLabels(source.label?.identity);
@@ -122,12 +123,8 @@ export class TileRecords {
     this.updateLabelGeometry(this.source);
   }
 
-  setEpoch(epoch: number): void {
-    this.epoch = epoch;
-  }
-
   setHeaderHeight(height: number): void {
-    this.headerHeight = height;
+    this.frameState.headerHeight = height;
   }
 
   setContentWidth(width: number): void {
@@ -156,7 +153,7 @@ export class TileRecords {
       tilePrefix(kind),
       rasterScale,
       this.keyTile,
-      tileIdentity(kind, source, this.epoch),
+      tileIdentity(kind, source, this.frameState.epoch),
     );
     this.keys[slot] = key;
     this.records.active[slot] = 1;
@@ -166,7 +163,7 @@ export class TileRecords {
     if (this.records.labelIdentity)
       this.records.labelIdentity[slot] = labelIdentity(kind, source);
     this.records.rasterScale[slot] = rasterScale;
-    this.records.epoch[slot] = this.epoch;
+    this.records.epoch[slot] = this.frameState.epoch;
     this.records.contentVersion[slot] = source.contentVersion;
     this.highlighted[slot] = source.highlighted ? 1 : 0;
     this.records.column[slot] = column;
@@ -195,7 +192,7 @@ export class TileRecords {
           ? this.headerPaths[index] === this.source?.filePath
           : kind === LABEL_KIND
             ? this.labelIdentities[index] === this.source?.label?.identity
-            : this.records.epoch[index] === this.epoch)
+            : this.records.epoch[index] === this.frameState.epoch)
       )
         return index;
     }
@@ -207,6 +204,34 @@ export class TileRecords {
       if (this.records.active[index] && this.keys[index] === key) return index;
     }
     return -1;
+  }
+
+  recordKind(record: number): number {
+    return this.records.kind[record] ?? CONTENT_KIND;
+  }
+
+  recordRasterScale(record: number): number {
+    return this.records.rasterScale[record] ?? 1;
+  }
+
+  recordColumn(record: number): number {
+    return this.records.column[record] ?? 0;
+  }
+
+  recordRow(record: number): number {
+    return this.records.row[record] ?? 0;
+  }
+
+  recordWidth(record: number): number {
+    return this.records.width[record] ?? 0;
+  }
+
+  recordHeight(record: number): number {
+    return this.records.height[record] ?? 0;
+  }
+
+  recordEpoch(record: number): number {
+    return this.records.epoch[record] ?? 0;
   }
 
   findFreeRecord(): number {
@@ -295,7 +320,7 @@ export class TileRecords {
     );
     this.records.height[slot] =
       kind === HEADER_KIND
-        ? Math.min(size, this.headerHeight)
+        ? Math.min(size, this.frameState.headerHeight)
         : Math.min(size, source.contentHeight - row * size);
   }
 

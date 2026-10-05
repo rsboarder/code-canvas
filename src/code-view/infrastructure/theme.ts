@@ -32,6 +32,8 @@ interface RawThemeSetting {
 const sourceTheme = darkPlus as ThemeJson;
 const background = sourceTheme.colors?.["editor.background"] ?? "#1E1E1E";
 const foreground = sourceTheme.colors?.["editor.foreground"] ?? "#D4D4D4";
+const lineNumber =
+  sourceTheme.colors?.["editorLineNumber.foreground"] ?? "#5A6270";
 
 function themeSetting(entry: ThemeEntry): RawThemeSetting {
   const settings = entry.settings ?? {};
@@ -66,6 +68,7 @@ colors[0] = foreground;
 export const themePalette: ThemePalette = {
   background,
   foreground,
+  lineNumber,
   colors,
 };
 
@@ -76,5 +79,6 @@ export const monacoTheme: editor.IStandaloneThemeData = {
   colors: {
     "editor.background": themePalette.background,
     "editor.foreground": themePalette.foreground,
+    "editorLineNumber.foreground": themePalette.lineNumber,
   },
 };

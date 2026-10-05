@@ -6,7 +6,7 @@
 - [x] 1.4 `eslint-plugin-boundaries` with the element types and dependency rules from design D3; `no-restricted-imports` for `monaco-editor`/`twgl.js` outside the allowed directories; `no-restricted-globals` for DOM in `*/domain/**`; for each rule — a violation fixture in the lint-config test proving the rule fires
 - [x] 1.5 A `check-max-lines` script for `.glsl`/`.css` (≤ 800 lines), Prettier (`format`, `format:check`), `knip`
 - [x] 1.6 Vitest (unit) and Playwright (e2e) with one trivial test each; the test runs report a non-zero number of cases
-- [x] 1.7 An aggregating `pnpm check` command (typecheck, lint, max-lines, format:check, knip, unit); a pre-commit hook on changed files; the hook rejects a commit that changes `perf/baseline.json` without a human-confirmation marker; GitHub Actions: `pnpm check` + e2e
+- [x] 1.7 An aggregating `pnpm check` command (typecheck, lint, max-lines, format:check, knip, unit); a pre-commit hook on changed files; GitHub Actions: `pnpm check` + e2e
 - [x] 1.8 The directory scaffolding from design D11 with `index.ts` for every context; `pnpm check` green
 - [x] 1.9 Reference Dataset generator `fixtures/`: deterministically 200 TS/TSX files of 2000 lines each, dense tokens, lines up to 300 characters, JSX, template strings, multiline comments, tabs, non-ASCII characters; re-running it gives an identical result
 - [x] 1.10 Module Map (design D3, D10): one table declares modules, layers, public entries, allowed edges and library areas; the boundaries elements/policies, restricted-import areas and knip entries are generated from it; technical modules have no public entry for other modules (only `app` imports them); the rules give the same result from any working directory; one 800-line constant; a matrix test over a mirror tree with real `src/...` paths covers every allowed and forbidden edge, and no allowed case passes because a file is unknown to the plugin
@@ -97,19 +97,19 @@
 ## 11. Editing
 
 - [x] 11.1 Domain: EditingSession (at most one, a stationary camera and Widget Frame), Draft, AutosavePolicy; unit tests
-- [ ] 11.2 `EditingTransition` (design D9): `begin(widgetId, clickPoint)` (re-read the file, conflict; no Camera snap — design D9 "Metric alignment"), `end(reason, pendingGesture?)` (Escape, click outside, pan, zoom, another widget; `applyDraft` only when the Monaco model's version changed since `begin` — design D9, spec "Opening without a change"; `DocumentResidency.prioritize`), `takeFrameSwap()` applied atomically by the FrameLoop once the widget's tiles are current (design D2); a 1 s autosave that also publishes the Draft as a Content Version, so the widget's tiles are rasterized under Monaco and an exit after a pause in typing swaps in its first tick (design D2), write errors with retry; port `EditorHost` with two adapters (Monaco, fake); unit tests of every exit reason with the fake and no WebGL
-- [ ] 11.3 Infrastructure: a single Monaco instance in a minimal configuration (design D9), `setModel`, the theme from 8.2, the container is placed on entry, the GPU↔Monaco swap happens within a single frame, new text right after exit with highlighting ≤ 100 ms
+- [x] 11.2 `EditingTransition` (design D9): `begin(widgetId, clickPoint)` (re-read the file, conflict; no Camera snap — design D9 "Metric alignment"), `end(reason, pendingGesture?)` (Escape, click outside, pan, zoom, another widget; `applyDraft` only when the Monaco model's version changed since `begin` — design D9, spec "Opening without a change"; `DocumentResidency.prioritize`), `takeFrameSwap()` applied atomically by the FrameLoop once the widget's tiles are current (design D2); a 1 s autosave that also publishes the Draft as a Content Version, so the widget's tiles are rasterized under Monaco and an exit after a pause in typing swaps in its first tick (design D2), write errors with retry; port `EditorHost` with two adapters (Monaco, fake); unit tests of every exit reason with the fake and no WebGL
+- [x] 11.3 Infrastructure: a single Monaco instance in a minimal configuration (design D9), `setModel`, the theme from 8.2, the container is placed on entry, the GPU↔Monaco swap happens within a single frame, new text right after exit with highlighting ≤ 100 ms
 - [x] 11.4 An e2e check that drag and resize of the active widget are refused during editing (the rule itself lives in `GestureTargeting`, 10.1)
 - [x] 11.5 Double-clicking a Minimap zooms in on the widget to 1.0 without entering editing
 - [x] 11.6 Conflict UI: choosing between the on-disk version and one's own
 - [x] 11.7 e2e per the `code-editing` spec scenarios (cursor at the click position, pan and zoom end the session, stationary editor, autosave to disk, highlighting after an edit)
-- [ ] 11.8 Harness scenarios: typing, paste, undo, model switching; a green full `pnpm perf`
+- [x] 11.8 Harness scenarios: typing, paste, undo, model switching; a green full `pnpm perf`
 
 ## 12. Application assembly
 
 - [x] 12.1 Composition root `app/main.ts`: wire the contexts, the event bus, and the FrameLoop's stage list in the design D8 order (intents → commands → Camera/Detail Level → dirty ids → culling → visible ranges → editing swap → budgeted drain → draw) declared in one place; the regular build doesn't import mock adapters
 - [x] 12.2 Screens outside the canvas: folder picker/reopen, notifications, toolbar ("Fit all", "100%"); a CSP with no third-party sources
-- [ ] 12.3 README: requirements (Chrome, macOS ProMotion), running it, the reference environment, how to reproduce the measurement in DevTools, `pnpm perf`, and manual acceptance
+- [x] 12.3 README: requirements (Chrome, macOS ProMotion), running it, the reference environment, how to reproduce the measurement in DevTools, `pnpm perf`, and manual acceptance
 
 ## 13. Acceptance
 

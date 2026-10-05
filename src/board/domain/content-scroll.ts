@@ -42,8 +42,9 @@ export class ContentScroll {
     return this._value - previous;
   }
 
-  scrollTo(value: number): void {
+  scrollTo(value: number): number {
     this._value = Math.min(this.max, Math.max(0, value));
+    return this._value;
   }
 
   private clampValue(): void {

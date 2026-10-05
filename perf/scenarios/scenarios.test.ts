@@ -5,6 +5,7 @@ import panScenario from "./pan-whole-canvas";
 import { isEditorOnlyScenario } from "./schema";
 import densityScenario from "./worst-case-text-density";
 import manipulationScenario from "./drag-resize-scroll";
+import lineBreakScenario from "./line-break";
 import typingScenario from "./typing";
 
 const fastScenarios = [
@@ -34,6 +35,7 @@ describe("fast performance scenarios", () => {
 describe("editor-only scenarios", () => {
   it("only scenarios without pointer steps are editor-only", () => {
     expect(isEditorOnlyScenario(largeEditScenario)).toBe(true);
+    expect(isEditorOnlyScenario(lineBreakScenario)).toBe(true);
     expect(isEditorOnlyScenario(typingScenario)).toBe(false);
   });
 });

@@ -87,3 +87,28 @@ describe("frame draw metrics", () => {
     expect(value.drawnMinimapCount).toBe(0);
   });
 });
+
+describe("frame draw metrics aggregation", () => {
+  it("uses the worst values from every drawn widget", () => {
+    const value = metrics();
+
+    recordDrawMetrics(value, {
+      content: true,
+      fallback: false,
+      highlighted: true,
+      epoch: 8,
+      contentVersion: 9,
+    });
+    recordDrawMetrics(value, {
+      content: true,
+      fallback: true,
+      highlighted: false,
+      epoch: 3,
+      contentVersion: 4,
+    });
+
+    expect(value.lowestEpochDrawn).toBe(3);
+    expect(value.lowestContentVersion).toBe(4);
+    expect(value.drawnUnhighlightedTileCount).toBe(1);
+  });
+});

@@ -6,9 +6,24 @@ import {
   type WheelInput,
 } from "../interaction/gesture-targeting";
 import type { FrameLoop, WebGlRenderer } from "../rendering";
+import type { GesturePhase } from "../shared/frame";
+import { syncDetailLevel } from "./detail-level-sync";
 
 const CAMERA_CHANGED = 1;
 const WIDGET_CHANGED = 2;
+const gesturePhase: GesturePhase = {
+  gestureInProgress: false,
+  zoomGestureActive: false,
+  zoomFocusX: 0,
+  zoomFocusY: 0,
+  zoomingOut: false,
+  gestureEnded: false,
+  endedGestureWasZoom: false,
+  detailIsMinimap: false,
+  zoomingIn: false,
+  textThresholdZoom: 0,
+  cameraScale: 1,
+};
 
 interface InputWiringOptions {
   readonly canvas: HTMLCanvasElement;
@@ -106,39 +121,23 @@ function applyIntents(
   intents: FrameIntents,
 ): void {
   const devicePixelRatio = window.devicePixelRatio || 1;
-  if (
-    options.board.detailLevel === "minimap" &&
-    intents.zoomFactor > 1 &&
-    intents.zoomGestureActive
-  ) {
-    renderer.beginTextPrefetch(
-      options.board.textThresholdZoom(devicePixelRatio),
-    );
-  }
+  gesturePhase.detailIsMinimap = options.board.detailLevel === "minimap";
+  gesturePhase.textThresholdZoom =
+    options.board.textThresholdZoom(devicePixelRatio);
+  gesturePhase.zoomingIn = intents.zoomFactor > 1;
   const changes = applyBoardIntents(options, intents);
   if (changes !== 0) options.updateWidgetBodyRect();
-  const level = options.board.updateDetailLevel(
-    devicePixelRatio,
-    renderer.textReady(),
-  );
-  if (options.canvas.getAttribute("data-detail-level") !== level) {
-    options.canvas.setAttribute("data-detail-level", level);
-  }
-  renderer.setDetailLevel(level, options.board.textWanted(devicePixelRatio));
+  syncDetailLevel(options.board, renderer, options.canvas);
   frameLoop.setGestureInProgress(intents.gestureInProgress);
-  renderer.setGestureInProgress(intents.gestureInProgress);
-  renderer.setZoomGestureActive(intents.zoomGestureActive);
-  renderer.setZoomFocus(
-    intents.zoomFocusX,
-    intents.zoomFocusY,
-    intents.zoomingOut,
-  );
-  if (intents.gestureEnded) {
-    renderer.notifyGestureEnded(
-      intents.endedGestureWasZoom,
-      options.board.camera.scale,
-    );
-  }
+  gesturePhase.gestureInProgress = intents.gestureInProgress;
+  gesturePhase.zoomGestureActive = intents.zoomGestureActive;
+  gesturePhase.zoomFocusX = intents.zoomFocusX;
+  gesturePhase.zoomFocusY = intents.zoomFocusY;
+  gesturePhase.zoomingOut = intents.zoomingOut;
+  gesturePhase.gestureEnded = intents.gestureEnded;
+  gesturePhase.endedGestureWasZoom = intents.endedGestureWasZoom;
+  gesturePhase.cameraScale = options.board.camera.scale;
+  renderer.setGesturePhase(gesturePhase);
 }
 
 function applyBoardIntents(

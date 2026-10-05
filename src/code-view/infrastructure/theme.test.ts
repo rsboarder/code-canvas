@@ -50,5 +50,8 @@ describe("theme", () => {
     expect(monacoTheme.colors["editor.foreground"]).toBe(
       themePalette.foreground,
     );
+    expect(monacoTheme.colors["editorLineNumber.foreground"]).toBe(
+      themePalette.lineNumber,
+    );
   });
 });

@@ -10,6 +10,11 @@ export type {
 } from "./application/document-residency/index";
 export { createLineGeometry, LineLayout } from "./domain/line-layout";
 export {
+  LINE_NUMBER_GAP_CSS,
+  LineNumberGutter,
+  MIN_LINE_NUMBER_DIGITS,
+} from "./domain/line-number-gutter";
+export {
   MINIMAP_LINE_METRICS,
   type LayoutCell,
   type LineGeometry,

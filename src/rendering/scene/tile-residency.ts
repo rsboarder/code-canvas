@@ -1,5 +1,6 @@
 import type { CameraView } from "../../board/index";
 import { Camera } from "../../board/index";
+import type { GesturePhase } from "../../shared/frame";
 import type { Rect } from "../../shared/geometry/geometry";
 import type { CodeTextMetrics } from "../text/text-metrics";
 import { TilePass, type TileDrawContext } from "../passes/tile-pass";
@@ -15,15 +16,18 @@ import {
 } from "./tile-frame-painter";
 import { computeTilePoolCapacity, tilePoolGrowthTarget } from "./tile-plan";
 import { TimeToSharpClock } from "./time-to-sharp-clock";
-import {
-  TileJobQueue,
-  type TileContentSource,
-  type TileLabelContentSource,
-  type TileJobOwner,
-} from "./tile-job-queue";
-import { CONTENT_KIND, HEADER_KIND, LABEL_KIND } from "./tile-records";
+import { TileJobQueue, type TileJobOwner } from "./tile-job-queue";
+import type {
+  TileContentSource,
+  TileLabelContentSource,
+} from "./tile-kind-jobs";
 import { bodyViewWindow } from "./tile-view-window";
-import { WidgetTiles } from "./widget-tiles";
+import {
+  CONTENT_KIND,
+  HEADER_KIND,
+  LABEL_KIND,
+  WidgetTiles,
+} from "./widget-tile-set";
 import type { WidgetId, WidgetTable } from "./widget-table";
 
 export interface TileDebugSnapshot {
@@ -93,7 +97,6 @@ export class TileResidency {
     widgets: this.visibleWidgets,
     count: 0,
     detailIsMinimap: false,
-    documentId: "",
     hiddenBodyId: undefined,
   };
   private readonly metrics: FrameDrawMetrics = {
@@ -117,7 +120,6 @@ export class TileResidency {
   private growthTarget = 0;
   private growthScheduled = false;
   private readonly timeToSharpClock = new TimeToSharpClock();
-  private documentId = "";
   private hiddenBodyId: string | undefined;
   private minimapActive = false;
   private textWanted = false;
@@ -127,6 +129,7 @@ export class TileResidency {
   private zoomFocusX = 0;
   private zoomFocusY = 0;
   private zoomOut = false;
+  private priorityFileId: string | undefined;
   private lastTextReady = false;
   private visibleTextExact = false;
   private visibleMissingContent = false;
@@ -188,10 +191,6 @@ export class TileResidency {
     });
   }
 
-  setDocument(fileId: string): void {
-    this.documentId = fileId;
-  }
-
   isRegistered(fileId: string): boolean {
     return pathsContain(this.registeredIds, fileId);
   }
@@ -219,36 +218,39 @@ export class TileResidency {
     this.textWanted = textWanted;
   }
 
-  beginTextPrefetch(thresholdZoom: number): void {
-    this.textPrefetchActive = true;
-    this.textPrefetchZoom = thresholdZoom;
-  }
-
   textReady(): boolean {
     return this.lastTextReady;
   }
 
-  setZoomGestureActive(active: boolean): void {
-    if (active && !this.zoomGestureActive)
-      this.timeToSharpClock.zoomGestureStarted();
-    this.zoomGestureActive = active;
-  }
-
-  setZoomFocus(x: number, y: number, zoomOut: boolean): void {
-    this.zoomFocusX = x;
-    this.zoomFocusY = y;
-    this.zoomOut = zoomOut;
-  }
-
-  notifyGestureEnded(wasZoom: boolean, cameraScale: number): void {
+  setGesturePhase(phase: GesturePhase): void {
+    this.updateTextPrefetch(phase);
+    const zoomStarted = phase.zoomGestureActive && !this.zoomGestureActive;
+    if (zoomStarted) this.timeToSharpClock.zoomGestureStarted();
+    this.zoomGestureActive = phase.zoomGestureActive;
+    this.zoomFocusX = phase.zoomFocusX;
+    this.zoomFocusY = phase.zoomFocusY;
+    this.zoomOut = phase.zoomingOut;
+    if (!phase.gestureEnded) return;
     this.zoomGestureActive = false;
     this.textPrefetchActive = false;
-    if (!wasZoom) return;
-    this.updateSettledZoom(cameraScale);
+    if (!phase.endedGestureWasZoom) return;
+    this.updateSettledZoom(phase.cameraScale);
     this.timeToSharpClock.zoomGestureEnded(
       !this.minimapActive,
       performance.now(),
     );
+  }
+
+  setPriorityFile(fileId: string | undefined): void {
+    if (this.priorityFileId === fileId) return;
+    this.priorityFileId = fileId;
+  }
+
+  private updateTextPrefetch(phase: GesturePhase): void {
+    if (!phase.detailIsMinimap || !phase.zoomGestureActive || !phase.zoomingIn)
+      return;
+    this.textPrefetchActive = true;
+    this.textPrefetchZoom = phase.textThresholdZoom;
   }
 
   rasterError(): string | undefined {
@@ -271,29 +273,32 @@ export class TileResidency {
     this.jobQueue.onResult(callback);
   }
 
-  debugSnapshot(): TileDebugSnapshot {
-    const widget = this.widgets.get(this.documentId);
+  debugSnapshot(fileId?: string): TileDebugSnapshot {
+    const selectedFileId = fileId ?? this.registeredIds[0];
+    const widget = selectedFileId
+      ? this.widgets.get(selectedFileId)
+      : undefined;
     if (!widget)
       return { rasterScales: [], timeToSharpMs: this.lastTimeToSharpMs };
     const scales: number[] = [];
     for (
-      let row = widget.planner.visibleFirstRow;
-      row <= widget.planner.visibleLastRow;
+      let row = widget.visibleFirstRow;
+      row <= widget.visibleLastRow;
       row += 1
     ) {
       for (
-        let column = widget.planner.visibleFirstColumn;
-        column <= widget.planner.visibleLastColumn;
+        let column = widget.visibleFirstColumn;
+        column <= widget.visibleLastColumn;
         column += 1
       ) {
-        const record = widget.records.findRecord(
+        const record = widget.findRecord(
           CONTENT_KIND,
-          widget.planner.requestedScale,
+          widget.requestedScale,
           column,
           row,
         );
-        if (record >= 0 && widget.records.records.ready[record])
-          scales.push(widget.records.records.rasterScale[record] ?? 0);
+        if (record >= 0 && widget.isRecordReady(record))
+          scales.push(widget.recordRasterScale(record));
       }
     }
     return { rasterScales: scales, timeToSharpMs: this.lastTimeToSharpMs };
@@ -313,20 +318,14 @@ export class TileResidency {
     out.minimapActive = this.minimapActive;
   }
 
-  tilesCurrentFor(fileId: string, contentVersion: number): boolean {
+  // Compare the handed-back scroll because this stage runs before drain re-plans it.
+  exitViewCovered(fileId: string, contentVersion: number): boolean {
     const widget = this.widgets.get(fileId);
-    const sourceVersion = widget?.contentSource?.contentVersion;
-    if (
-      widget === undefined ||
-      sourceVersion === undefined ||
-      sourceVersion < contentVersion
-    )
-      return false;
+    if (widget === undefined) return false;
     if (this.jobQueue.rasterError()) return true;
-    return (
-      !this.zoomGestureActive &&
-      widget.planner.requestedScale === widget.planner.atRestScale &&
-      widget.exactVisibleReady
+    return widget.exitViewCovered(
+      contentVersion,
+      this.table.contentScrollAt(widget.row),
     );
   }
 
@@ -358,7 +357,6 @@ export class TileResidency {
     if (!this.jobQueue.rasterError()) {
       this.paintInput.count = this.visibleWidgets.length;
       this.paintInput.detailIsMinimap = detailIsMinimap;
-      this.paintInput.documentId = this.documentId;
       this.paintInput.hiddenBodyId = this.hiddenBodyId;
       this.painter.draw(this.paintInput);
     } else {
@@ -514,49 +512,54 @@ export class TileResidency {
   private requestVisible(): void {
     this.tileRequests = 0;
     this.missingTiles = 0;
+    const priorityFileId = this.priorityFileId;
+    if (priorityFileId !== undefined) {
+      for (const widget of this.visibleWidgets) {
+        if (widget.fileId !== priorityFileId) continue;
+        this.requestWidget(widget);
+        break;
+      }
+    }
     for (const widget of this.visibleWidgets) {
-      if (!widget.contentSource) continue;
-      if (widget.planner.requestLabel) {
-        const record = widget.records.ensureRecord(
-          LABEL_KIND,
-          widget.planner.requestedLabelScale,
-          0,
-          0,
-        );
-        this.registerRecord(widget, record);
-        if (record >= 0) this.jobQueue.ensureTile(widget, record);
-      }
-      for (
-        let header = 0;
-        header < widget.planner.requestHeaderCount;
-        header += 1
-      ) {
-        const record = widget.records.ensureRecord(
-          HEADER_KIND,
-          widget.planner.requestedHeaderScale,
-          widget.planner.requestHeaderColumns[header] ?? 0,
-          0,
-        );
-        this.registerRecord(widget, record);
-        if (record >= 0) this.jobQueue.ensureTile(widget, record);
-      }
-      for (
-        let request = 0;
-        request < widget.planner.requestCount;
-        request += 1
-      ) {
-        const record = widget.records.ensureRecord(
-          CONTENT_KIND,
-          widget.planner.requestScales[request] ?? 1,
-          widget.planner.requestColumns[request] ?? 0,
-          widget.planner.requestRows[request] ?? 0,
-        );
-        this.registerRecord(widget, record);
-        if (record >= 0) {
-          this.jobQueue.ensureTile(widget, record);
-          this.tileRequests += 1;
-          if (!widget.records.records.ready[record]) this.missingTiles += 1;
-        }
+      if (widget.fileId === priorityFileId) continue;
+      this.requestWidget(widget);
+    }
+  }
+
+  private requestWidget(widget: WidgetTiles): void {
+    if (!widget.contentSource) return;
+    if (widget.requestLabel) {
+      const record = widget.ensureRecord(
+        LABEL_KIND,
+        widget.requestedLabelScale,
+        0,
+        0,
+      );
+      this.registerRecord(widget, record);
+      if (record >= 0) this.jobQueue.ensureTile(widget, record);
+    }
+    for (let header = 0; header < widget.requestHeaderCount; header += 1) {
+      const record = widget.ensureRecord(
+        HEADER_KIND,
+        widget.requestedHeaderScale,
+        widget.requestHeaderColumns[header] ?? 0,
+        0,
+      );
+      this.registerRecord(widget, record);
+      if (record >= 0) this.jobQueue.ensureTile(widget, record);
+    }
+    for (let request = 0; request < widget.requestCount; request += 1) {
+      const record = widget.ensureRecord(
+        CONTENT_KIND,
+        widget.requestScales[request] ?? 1,
+        widget.requestColumns[request] ?? 0,
+        widget.requestRows[request] ?? 0,
+      );
+      this.registerRecord(widget, record);
+      if (record >= 0) {
+        this.jobQueue.ensureTile(widget, record);
+        this.tileRequests += 1;
+        if (!widget.isRecordReady(record)) this.missingTiles += 1;
       }
     }
   }
@@ -577,7 +580,7 @@ export class TileResidency {
   }
 
   private registerRecord(widget: WidgetTiles, record: number): void {
-    const key = record >= 0 ? widget.records.keys[record] : undefined;
+    const key = record >= 0 ? widget.recordKey(record) : undefined;
     if (key) this.keyOwners.set(key, widget);
   }
 
@@ -600,7 +603,8 @@ export class TileResidency {
   private removeWidget(fileId: string, index: number): void {
     const widget = this.widgets.get(fileId);
     if (widget) {
-      for (const key of widget.records.keys) {
+      for (let record = 0; record < widget.recordCapacity; record += 1) {
+        const key = widget.recordKey(record);
         if (key) this.keyOwners.delete(key);
       }
       widget.release();

@@ -119,6 +119,18 @@ export class BoardService implements BoardReadModel {
     return appliedDelta;
   }
 
+  setContentScroll(id: SourceFileId, value: number): number {
+    const widget = this.board.widget(id);
+    if (widget === undefined) throw new RangeError("Unknown widget id.");
+    const previous = widget.contentScroll;
+    const applied = this.board.setContentScroll(id, value);
+    if (applied !== previous) {
+      this.dirtyWidgetIds.add(id);
+      this.currentSavedLayoutRevision += 1;
+    }
+    return applied;
+  }
+
   bringToFront(id: SourceFileId): void {
     const oldIndex = this.board.stackIndexOf(id);
     const widgetCount = this.board.widgetCount;

@@ -70,8 +70,8 @@ export class Widget {
     return this.scroll.scrollBy(deltaY);
   }
 
-  scrollTo(value: number): void {
-    this.scroll.scrollTo(value);
+  scrollTo(value: number): number {
+    return this.scroll.scrollTo(value);
   }
 
   setLineCount(lineCount: number): void {

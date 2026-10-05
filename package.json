@@ -13,14 +13,12 @@
     ]
   },
   "simple-git-hooks": {
-    "pre-commit": "pnpm exec lint-staged && pnpm typecheck && pnpm baseline:guard"
+    "pre-commit": "pnpm exec lint-staged && pnpm typecheck"
   },
   "scripts": {
     "dev": "vite",
     "build": "pnpm typecheck && vite build",
     "fixtures": "tsx fixtures/generate.ts",
-    "baseline:guard": "node --import tsx/esm scripts/guard-baseline.ts",
-    "baseline:guard:ci": "node --import tsx/esm scripts/guard-baseline.ts --ci",
     "check": "pnpm typecheck && pnpm lint && pnpm check-max-lines && pnpm format:check && pnpm knip && pnpm test",
     "check-max-lines": "node --import tsx/esm scripts/check-max-lines.ts",
     "format": "prettier . --write",

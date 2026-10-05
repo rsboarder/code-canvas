@@ -1,11 +1,9 @@
+import type { LineMetrics } from "../../code-view/index";
+import { LineNumberGutter } from "../../code-view/index";
 import type { FontDefinition } from "../../shared/font";
 
-export interface CodeTextMetrics {
-  readonly narrowAdvance: number;
-  readonly tabSize: number;
-  readonly baseline: number;
-  readonly lineHeight: number;
-  readonly advanceFor: (cluster: string) => number;
+export interface CodeTextMetrics extends LineMetrics {
+  readonly lineNumberGutter: LineNumberGutter;
 }
 
 export interface TextMetricsProbeLine {
@@ -20,6 +18,7 @@ export interface TextMetricsProbe {
 
 const METRIC_PRECISION = 1000;
 const NARROW_PROBE_LENGTH = 256;
+const DIGITS = "0123456789";
 
 // The character Text Metrics measures its narrow advance from (D6 "Text
 // Metrics"); each raster worker measures the same character with the same
@@ -93,8 +92,12 @@ export function createTextMetrics(
   const advanceFor = createAdvanceCache(
     (cluster) => context.measureText(cluster).width,
   );
+  const widestDigitAdvance = Math.max(
+    ...Array.from(DIGITS, (digit) => advanceFor(digit)),
+  );
   return {
     narrowAdvance,
+    lineNumberGutter: new LineNumberGutter(widestDigitAdvance),
     tabSize: font.tabSize,
     baseline,
     lineHeight: font.lineHeight,

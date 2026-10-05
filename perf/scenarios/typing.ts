@@ -10,7 +10,7 @@ export default scenarioSchema.parse({
     requiresBridgeCommands: ["beginEditing"],
   },
   steps: [
-    { kind: "type", text: "const typed = 1;\n", charsPerSecond: 10 },
+    { kind: "type", text: "const typed = 1;", charsPerSecond: 10 },
     { kind: "wait", ms: 300 },
     { kind: "dblclick", x: 1000, y: 300 },
     { kind: "wait", ms: 600 },

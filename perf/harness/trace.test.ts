@@ -24,14 +24,47 @@ const mainThreadMetadata: TraceEvent = {
   args: { name: "CrRendererMain" },
 };
 
+interface FrameOptions {
+  readonly modelState?: string;
+  readonly affectsSmoothness?: boolean;
+  readonly beginFrameSubtype?: "MISSED" | "NORMAL";
+  readonly modelTimestamp?: number;
+}
+
 const frame = (
   index: number,
   state: string,
   category = "cc",
-  modelState = state,
+  options: FrameOptions = {},
 ): TraceEvent[] => {
   const timestamp = index * 8_000;
+  const modelTimestamp = options.modelTimestamp ?? timestamp + 10_000;
+  const modelState = options.modelState ?? state;
+  const reporter =
+    options.affectsSmoothness === undefined
+      ? { state }
+      : { state, affects_smoothness: options.affectsSmoothness };
   return [
+    ...(options.beginFrameSubtype === undefined
+      ? []
+      : [
+          {
+            name: "Scheduler::BeginImplFrame",
+            cat: "cc",
+            ph: "X",
+            ts: modelTimestamp,
+            dur: 0,
+            pid: 1,
+            tid: 2,
+            args: {
+              args: {
+                subtype: options.beginFrameSubtype,
+                frame_time_us: modelTimestamp,
+                sequence_number: index + 1,
+              },
+            },
+          },
+        ]),
     {
       name: "PipelineReporter",
       cat: category,
@@ -41,7 +74,7 @@ const frame = (
       pid: 1,
       tid: 2,
       id: String(index),
-      args: { frame_reporter: { state } },
+      args: { frame_reporter: reporter },
     },
     {
       name: "PipelineReporter",
@@ -52,9 +85,9 @@ const frame = (
       pid: 1,
       tid: 2,
       id: String(index),
-      args: { frame_reporter: { state } },
+      args: { frame_reporter: reporter },
     },
-    ...modelFrameEvents(timestamp + 10_000, index + 1, modelState),
+    ...modelFrameEvents(modelTimestamp, index + 1, modelState),
   ];
 };
 
@@ -261,9 +294,18 @@ const traceForStates = (
     task(0, 1_000, "https://app.test/assets/main.js"),
   ],
   category = "cc",
+  affectsSmoothness: readonly (boolean | undefined)[] = [],
 ): TraceEvents => [
   mainThreadMetadata,
-  ...states.flatMap((state, index) => frame(index, state, category)),
+  ...states.flatMap((state, index) => {
+    const smoothness = affectsSmoothness[index];
+    return frame(
+      index,
+      state,
+      category,
+      smoothness === undefined ? {} : { affectsSmoothness: smoothness },
+    );
+  }),
   ...(states[states.length - 1] === "STATE_DROPPED" ||
   states[states.length - 1] === "STATE_PRESENTED_PARTIAL"
     ? modelFrame(states.length)
@@ -306,10 +348,39 @@ it("counts dropped frames", async () => {
   expect(metrics.frames.dropped).toBe(1);
 });
 
+it("sets aside a dropped frame whose begin-frame was missed", async () => {
+  const metrics = await classify([
+    mainThreadMetadata,
+    ...frame(-1, "STATE_PRESENTED_ALL"),
+    ...frame(0, "STATE_DROPPED", "cc", { beginFrameSubtype: "MISSED" }),
+    ...frame(1, "STATE_PRESENTED_ALL"),
+    task(0, 1_000, "https://app.test/assets/main.js"),
+  ]);
+
+  expect(metrics.frames.dropped).toBe(0);
+  expect(metrics.frames.partiallyPresented).toBe(0);
+  expect(metrics.frames.wakeUp).toBe(1);
+});
+
+it("counts a dropped frame with a normal begin-frame", async () => {
+  const metrics = await classify([
+    mainThreadMetadata,
+    ...frame(-1, "STATE_PRESENTED_ALL"),
+    ...frame(0, "STATE_DROPPED", "cc", { beginFrameSubtype: "NORMAL" }),
+    ...frame(1, "STATE_PRESENTED_ALL"),
+    task(0, 1_000, "https://app.test/assets/main.js"),
+  ]);
+
+  expect(metrics.frames.dropped).toBe(1);
+  expect(metrics.frames.wakeUp).toBe(0);
+});
+
 it("uses the frame model when PipelineReporter says a frame was dropped", async () => {
   const metrics = await classify([
     mainThreadMetadata,
-    ...frame(0, "STATE_DROPPED", "cc", "STATE_PRESENTED_ALL"),
+    ...frame(0, "STATE_DROPPED", "cc", {
+      modelState: "STATE_PRESENTED_ALL",
+    }),
     task(0, 1_000, "https://app.test/assets/main.js"),
   ]);
 
@@ -346,6 +417,99 @@ it("counts a gap that holds a dropped frame", async () => {
   expect(metrics.frames.dropped).toBe(1);
   expect(metrics.intervalsMs.max).toBe(24);
   expect(metrics.intervalsOver12_5Ms).toBe(1);
+});
+
+it("skips a gap whose dropped frame does not affect smoothness", async () => {
+  const metrics = await classify(
+    traceForStates(
+      [
+        "STATE_PRESENTED_ALL",
+        "STATE_PRESENTED_ALL",
+        "STATE_NO_UPDATE_DESIRED",
+        "STATE_DROPPED",
+        "STATE_PRESENTED_ALL",
+      ],
+      undefined,
+      "cc",
+      [undefined, undefined, undefined, false, undefined],
+    ),
+  );
+
+  expect(metrics.intervalsOver12_5Ms).toBe(0);
+});
+
+it("counts a gap whose dropped frame affects smoothness", async () => {
+  const metrics = await classify(
+    traceForStates(
+      [
+        "STATE_PRESENTED_ALL",
+        "STATE_PRESENTED_ALL",
+        "STATE_NO_UPDATE_DESIRED",
+        "STATE_DROPPED",
+        "STATE_PRESENTED_ALL",
+      ],
+      undefined,
+      "cc",
+      [undefined, undefined, undefined, true, undefined],
+    ),
+  );
+
+  expect(metrics.intervalsOver12_5Ms).toBe(1);
+});
+
+it("skips a gap whose dropped frame had a missed begin-frame", async () => {
+  const metrics = await classify([
+    mainThreadMetadata,
+    ...frame(0, "STATE_PRESENTED_ALL"),
+    ...frame(1, "STATE_PRESENTED_ALL"),
+    ...frame(2, "STATE_NO_UPDATE_DESIRED"),
+    ...frame(3, "STATE_DROPPED", "cc", {
+      affectsSmoothness: true,
+      beginFrameSubtype: "MISSED",
+      modelTimestamp: 3 * 8_000,
+    }),
+    ...frame(4, "STATE_PRESENTED_ALL"),
+    task(0, 1_000, "https://app.test/assets/main.js"),
+  ]);
+
+  expect(metrics.intervalsOver12_5Ms).toBe(0);
+});
+
+it("does not use a presented wake-up frame as an interval endpoint", async () => {
+  const metrics = await classify([
+    mainThreadMetadata,
+    ...frame(-1, "STATE_NO_UPDATE_DESIRED"),
+    ...frame(0, "STATE_PRESENTED_ALL"),
+    ...frame(1, "STATE_PRESENTED_ALL", "cc", {
+      beginFrameSubtype: "MISSED",
+      modelTimestamp: 8_000,
+    }),
+    ...frame(2, "STATE_PRESENTED_ALL"),
+    ...frame(3, "STATE_PRESENTED_ALL"),
+    task(0, 1_000, "https://app.test/assets/main.js"),
+  ]);
+
+  expect(metrics.intervalsOver12_5Ms).toBe(0);
+});
+
+it("skips interval pairs adjacent to a presented wake-up frame", async () => {
+  const metrics = await classify([
+    mainThreadMetadata,
+    ...frame(0, "STATE_PRESENTED_ALL"),
+    ...frame(1, "STATE_NO_UPDATE_DESIRED"),
+    ...frame(2, "STATE_NO_UPDATE_DESIRED"),
+    ...frame(3, "STATE_PRESENTED_ALL", "cc", {
+      beginFrameSubtype: "MISSED",
+      modelTimestamp: 24_000,
+    }),
+    ...frame(4, "STATE_DROPPED", "cc", { affectsSmoothness: true }),
+    ...frame(5, "STATE_PRESENTED_ALL"),
+    ...frame(6, "STATE_PRESENTED_ALL"),
+    task(0, 1_000, "https://app.test/assets/main.js"),
+  ]);
+
+  expect(metrics.intervalsOver12_5Ms).toBe(0);
+  expect(metrics.intervalsMs.max).toBeLessThan(12.5);
 });
 
 it("keeps the whole trace when there are no input dispatch events", async () => {
@@ -398,6 +562,7 @@ it("counts whole-trace frames separately from interaction-window frames", async 
     partiallyPresented: 1,
     dropped: 1,
     idle: 1,
+    wakeUp: 0,
   });
   expect(metrics.frames).toEqual({
     total: 3,
@@ -405,6 +570,7 @@ it("counts whole-trace frames separately from interaction-window frames", async 
     partiallyPresented: 1,
     dropped: 1,
     idle: 1,
+    wakeUp: 0,
   });
 });
 

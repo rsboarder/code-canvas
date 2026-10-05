@@ -125,8 +125,17 @@ describe("environment preflight", () => {
     invalid(environment({ idleRateHz: 114.99 }));
   });
 
-  it("rejects battery power", () => {
-    invalid(environment({ powerSource: "battery" }));
+  it("accepts battery power", () => {
+    expect(
+      evaluatePreflight(
+        environment({ powerSource: "battery" }),
+        REFERENCE_THRESHOLDS,
+      ),
+    ).toEqual({
+      valid: true,
+      exitCode: 0,
+      reasons: [],
+    });
   });
 
   it("rejects Low Power Mode", () => {

@@ -250,6 +250,34 @@ export async function readMockFile(
   );
 }
 
+export async function writeMockFile(
+  page: Page,
+  path: string,
+  text: string,
+): Promise<void> {
+  await page.evaluate(
+    async ({ path: filePath, text: fileText }) => {
+      const root = await (
+        window as unknown as {
+          showDirectoryPicker: () => Promise<FileSystemDirectoryHandle>;
+        }
+      ).showDirectoryPicker();
+      const parts = filePath.split("/").filter(Boolean);
+      const fileName = parts.pop();
+      if (!fileName) throw new Error("Mock file path is empty.");
+      let parent = root;
+      for (const part of parts) {
+        parent = await parent.getDirectoryHandle(part, { create: true });
+      }
+      const file = await parent.getFileHandle(fileName, { create: true });
+      const writable = await file.createWritable();
+      await writable.write(fileText);
+      await writable.close();
+    },
+    { path, text },
+  );
+}
+
 export async function bodyPoint(page: Page): Promise<{ x: number; y: number }> {
   const value = await page
     .getByTestId("canvas")
@@ -262,6 +290,22 @@ export async function bodyPoint(page: Page): Promise<{ x: number; y: number }> {
     height: number;
   };
   return { x: rect.x + Math.min(120, rect.width / 2), y: rect.y + 24 };
+}
+
+export async function scrollCanvas(page: Page, deltaY: number): Promise<void> {
+  const point = await bodyPoint(page);
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.wheel(0, deltaY);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            resolve();
+          });
+        });
+      }),
+  );
 }
 
 export async function openFolder(page: Page): Promise<void> {

@@ -4,6 +4,7 @@ import {
 } from "monaco-editor/editor/editor.api.js";
 import EditorWorker from "monaco-editor/editor/editor.worker.js?worker";
 
+import { EDITOR_LINE_NUMBER_LAYOUT } from "../application/editor-host";
 import type {
   EditorCursor,
   EditorHost,
@@ -34,11 +35,11 @@ function editorOptions(
     overviewRulerLanes: 0,
     wordWrap: "off",
     codeLens: false,
-    lineNumbers: "off",
+    lineNumbers: "on",
     glyphMargin: false,
     folding: false,
-    lineDecorationsWidth: 0,
-    lineNumbersMinChars: 0,
+    lineDecorationsWidth: EDITOR_LINE_NUMBER_LAYOUT.decorationsWidth,
+    lineNumbersMinChars: EDITOR_LINE_NUMBER_LAYOUT.minChars,
     guides: {
       indentation: false,
       bracketPairs: false,
@@ -228,6 +229,14 @@ class MonacoEditorHost implements EditorHost {
 
   setPosition(cursor: EditorCursor): void {
     this.editor.setPosition(cursor);
+  }
+
+  setScrollTop(scrollTop: number): void {
+    this.editor.setScrollTop(scrollTop);
+  }
+
+  getScrollTop(): number {
+    return this.editor.getScrollTop();
   }
 
   getPosition(): EditorCursor | undefined {

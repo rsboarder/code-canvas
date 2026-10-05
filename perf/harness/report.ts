@@ -490,15 +490,15 @@ function appendRunTable(
     "",
     "## Runs",
     "",
-    "| Scenario | Run | Trace | Trace frames | Presented | Partially presented | Dropped | Window frames | Window presented | Window partially presented | Window dropped | Intervals > 12.5 ms |",
-    "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Scenario | Run | Trace | Trace frames | Trace wake-up | Presented | Partially presented | Dropped | Window frames | Window wake-up | Window presented | Window partially presented | Window dropped | Intervals > 12.5 ms |",
+    "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
   );
   for (const scenario of scenarios) {
     for (const run of scenario.runs) {
       const trace = run.metrics.frames?.trace;
       const window = run.metrics.frames?.window;
       lines.push(
-        `| ${scenario.scenario} | ${String(run.run)} | ${run.tracePath} | ${frameValue(trace, "total")} | ${frameValue(trace, "presented")} | ${frameValue(trace, "partiallyPresented")} | ${frameValue(trace, "dropped")} | ${frameValue(window, "total")} | ${frameValue(window, "presented")} | ${frameValue(window, "partiallyPresented")} | ${frameValue(window, "dropped")} | ${String(run.metrics.longIntervals)} |`,
+        `| ${scenario.scenario} | ${String(run.run)} | ${run.tracePath} | ${frameValue(trace, "total")} | ${frameValue(trace, "wakeUp")} | ${frameValue(trace, "presented")} | ${frameValue(trace, "partiallyPresented")} | ${frameValue(trace, "dropped")} | ${frameValue(window, "total")} | ${frameValue(window, "wakeUp")} | ${frameValue(window, "presented")} | ${frameValue(window, "partiallyPresented")} | ${frameValue(window, "dropped")} | ${String(run.metrics.longIntervals)} |`,
       );
     }
   }
@@ -508,7 +508,7 @@ function frameValue(
   frames: FrameCounts | undefined,
   field: keyof FrameCounts,
 ): string {
-  return frames ? String(frames[field]) : "unavailable";
+  return frames ? String(frames[field] ?? 0) : "unavailable";
 }
 
 function floorMetricValue(

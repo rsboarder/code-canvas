@@ -1,7 +1,12 @@
-import type { BoardReadModel, WidgetRow } from "../../board/index";
+import {
+  createWidgetRow,
+  type BoardReadModel,
+  type BoardService,
+} from "../../board/index";
 import {
   DocumentResidency,
   LineLayout,
+  type LineNumberGutter,
   type LineMetrics,
 } from "../../code-view/index";
 import type { SourceFileId } from "../../shared/domain";
@@ -26,11 +31,16 @@ export interface FrameSwap {
 }
 
 interface EditingTransitionOptions {
-  readonly board: Pick<BoardReadModel, "camera" | "detailLevel" | "readWidget">;
+  readonly board: Pick<
+    BoardReadModel,
+    "camera" | "detailLevel" | "readWidget"
+  > &
+    Pick<BoardService, "setContentScroll">;
   readonly workspace: Pick<WorkspaceService, "readForEditing" | "applyDraft">;
   readonly editor: EditorHost;
   readonly residency: DocumentResidency;
   readonly lineMetrics: LineMetrics;
+  readonly gutter: LineNumberGutter;
   readonly tilesCurrent: (
     widgetId: SourceFileId,
     contentVersion: number,
@@ -52,6 +62,7 @@ export class EditingTransition {
   private pendingBeginWidgetId: SourceFileId | undefined;
   private pendingBeginX = 0;
   private pendingBeginY = 0;
+  private readonly widgetRow = createWidgetRow();
 
   constructor(private readonly options: EditingTransitionOptions) {
     this.options.editor.onChange(() => {
@@ -69,6 +80,12 @@ export class EditingTransition {
 
   get isExitHeld(): boolean {
     return this.pendingSwap?.direction === "exit";
+  }
+
+  get pendingExitFileId(): SourceFileId | undefined {
+    return this.pendingSwap?.direction === "exit"
+      ? this.pendingSwap.widgetId
+      : undefined;
   }
 
   autosave(now: number): boolean {
@@ -149,7 +166,9 @@ export class EditingTransition {
       this.session.publish(text, applied.contentVersion);
       this.latestPublishedVersion = applied.contentVersion;
     }
-    this.pendingExitVersion = this.latestPublishedVersion;
+    this.writeEditorScroll(draft.fileId);
+    this.pendingExitVersion =
+      this.latestPublishedVersion ?? draft.contentVersion;
     this.options.residency.prioritize(draft.fileId);
     this.pendingSwap = {
       direction: "exit",
@@ -213,18 +232,7 @@ export class EditingTransition {
     if (result.kind !== "ready" || this.options.board.detailLevel !== "text") {
       return;
     }
-    const row: WidgetRow = {
-      ...this.options.board.readWidget(widgetId, {
-        x: 0,
-        y: 0,
-        width: 0,
-        height: 0,
-        contentScroll: 0,
-        maxContentScroll: 0,
-        lineCount: 0,
-        stackIndex: 0,
-      }),
-    };
+    const row = this.options.board.readWidget(widgetId, this.widgetRow);
     if (
       !this.session.begin(
         {
@@ -248,18 +256,27 @@ export class EditingTransition {
       return;
     }
     this.latestPublishedVersion = undefined;
+    const codeX = this.options.gutter.codeX(row.lineCount, contentPoint.x);
     const cursor = new LineLayout(
       result.text,
       this.options.lineMetrics,
-    ).positionAt(contentPoint.x, contentPoint.y);
+    ).positionAt(codeX, contentPoint.y);
     this.options.editor.open({
       text: result.text,
       language: editorLanguage(result.path),
       cursor,
     });
+    this.options.editor.setScrollTop(row.contentScroll);
     this.options.editor.setReadOnly(false);
     this.options.editor.setVisible(false);
     this.pendingSwap = { direction: "enter", widgetId };
     this.options.onOpened();
+  }
+
+  private writeEditorScroll(widgetId: SourceFileId): void {
+    this.options.board.setContentScroll(
+      widgetId,
+      this.options.editor.getScrollTop(),
+    );
   }
 }

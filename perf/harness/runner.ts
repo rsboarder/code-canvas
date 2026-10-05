@@ -52,6 +52,7 @@ import densityScenario from "../scenarios/worst-case-text-density";
 import manipulationScenario from "../scenarios/drag-resize-scroll";
 import typingScenario from "../scenarios/typing";
 import largeEditScenario from "../scenarios/large-edit";
+import lineBreakScenario from "../scenarios/line-break";
 import loadScenario from "../scenarios/pan-initial-load";
 
 type ScenarioBudgetOverride = NonNullable<
@@ -68,6 +69,7 @@ const scenarioList = [
   manipulationScenario,
   typingScenario,
   largeEditScenario,
+  lineBreakScenario,
   loadScenario,
 ];
 

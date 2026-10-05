@@ -37,7 +37,6 @@ export class WidgetTable {
   private currentRowCount = 0;
   private currentDirtyStart = MAX_WIDGET_ROWS;
   private currentDirtyEnd = 0;
-  private documentId: WidgetId | undefined;
   private overflowLayoutVersion = INITIAL_LAYOUT_VERSION;
   private currentRowsVersion = 0;
 
@@ -59,15 +58,6 @@ export class WidgetTable {
 
   get dirtyRowEndExclusive(): number | undefined {
     return this.hasDirtyRows ? this.currentDirtyEnd : undefined;
-  }
-
-  get documentRowIndex(): number {
-    if (!this.documentId) return -1;
-    return this.rowById.get(this.documentId) ?? -1;
-  }
-
-  setDocumentId(id: string): void {
-    this.documentId = id as WidgetId;
   }
 
   rowFor(id: WidgetId): number | undefined {
@@ -102,15 +92,6 @@ export class WidgetTable {
   depthAt(row: number): number {
     if (row < 0 || row >= this.currentRowCount) return 0;
     return this.values[row * FLOATS_PER_ROW + 5] ?? 0;
-  }
-
-  readDocumentFrame(out: Rect): boolean {
-    return this.readFrame(this.documentRowIndex, out);
-  }
-
-  readDocumentContentScroll(): number {
-    const offset = this.documentRowIndex * FLOATS_PER_ROW;
-    return offset < 0 ? 0 : (this.values[offset + 4] ?? 0);
   }
 
   sync(board: WidgetTableBoard): void {

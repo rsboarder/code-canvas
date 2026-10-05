@@ -16,7 +16,6 @@ interface DrawnTileMetrics {
   readonly content: boolean;
   readonly fallback: boolean;
   readonly highlighted: boolean;
-  readonly document?: boolean;
   readonly epoch: number;
   readonly contentVersion: number;
 }
@@ -39,20 +38,16 @@ export function recordDrawMetrics(
   metrics.drawnTileCount += 1;
   if (!tile.content) metrics.drawnLabelTileCount += 1;
   if (tile.fallback) metrics.drawnFallbackTileCount += 1;
-  if (tile.document !== false && tile.content && !tile.highlighted) {
+  if (tile.content && !tile.highlighted) {
     metrics.drawnUnhighlightedTileCount += 1;
   }
-  if (
-    tile.document !== false &&
-    (metrics.lowestEpochDrawn < 0 || tile.epoch < metrics.lowestEpochDrawn)
-  ) {
+  if (metrics.lowestEpochDrawn < 0 || tile.epoch < metrics.lowestEpochDrawn) {
     metrics.lowestEpochDrawn = tile.epoch;
   }
   if (
-    tile.document !== false &&
-    (metrics.lowestContentVersion < 0 ||
-      (tile.contentVersion >= 0 &&
-        tile.contentVersion < metrics.lowestContentVersion))
+    metrics.lowestContentVersion < 0 ||
+    (tile.contentVersion >= 0 &&
+      tile.contentVersion < metrics.lowestContentVersion)
   ) {
     metrics.lowestContentVersion = tile.contentVersion;
   }

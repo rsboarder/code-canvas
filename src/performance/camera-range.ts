@@ -5,7 +5,7 @@ interface CameraRange {
 
 interface CameraRangeStage {
   readonly name: "camera-range";
-  readonly run: () => void;
+  readonly run: () => boolean;
   readonly reset: () => void;
   readonly range: () => CameraRange;
 }
@@ -25,6 +25,7 @@ export function createCameraRangeStage(
       const scale = readScale();
       minScale = Math.min(minScale, scale);
       maxScale = Math.max(maxScale, scale);
+      return false;
     },
     reset: () => {
       minScale = readScale();

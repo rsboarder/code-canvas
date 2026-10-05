@@ -5,7 +5,7 @@ The frame criterion (spec `performance-budget`) is judged only here. The harness
 | Item | Value |
 |---|---|
 | Machine | MacBook Pro with the built-in ProMotion display (120 Hz), DPR 2 |
-| Power | AC power attached; Low Power Mode off (it caps the display at 60 Hz; not measured by an agent — `pmset` shows the state, the preflight checks it) |
+| Power | Low Power Mode off (it caps the display at 60 Hz; the idle frame rate preflight catches it). AC power is not required (user's decision, 2026-10-04); the power source is recorded in the report |
 | Browser | Google Chrome stable (154.0.8037.58 on 2026-09-29; the preflight records the exact version), launched by Playwright with `channel: "chrome"`, headed, no vsync or frame-rate flags |
 | Profile | a clean temporary profile created by Playwright for each run: no extensions, no signed-in account, no restored tabs |
 | Window | visible, covering the built-in display; the machine is otherwise idle and the screen unlocked (a locked screen suppresses presentation) |

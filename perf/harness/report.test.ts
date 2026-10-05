@@ -660,16 +660,16 @@ describe("per-run Markdown report table", () => {
     const runsSeparatorIndex = lines.indexOf("## Runs") + 3;
 
     expect(lines[runsSeparatorIndex + 1]).toBe(
-      "| pan | 1 | pan-1.json.gz | 10 | 6 | 1 | 2 | 9 | 5 | 1 | 1 | 0 |",
+      "| pan | 1 | pan-1.json.gz | 10 | 0 | 6 | 1 | 2 | 9 | 0 | 5 | 1 | 1 | 0 |",
     );
     expect(lines[runsSeparatorIndex + 2]).toBe(
-      "| pan | 2 | pan-2.json.gz | 20 | 16 | 1 | 2 | 19 | 15 | 1 | 1 | 0 |",
+      "| pan | 2 | pan-2.json.gz | 20 | 0 | 16 | 1 | 2 | 19 | 0 | 15 | 1 | 1 | 0 |",
     );
     expect(lines[runsSeparatorIndex + 3]).toBe(
-      "| zoom | 1 | zoom-1.json.gz | 10 | 6 | 1 | 2 | 9 | 5 | 1 | 1 | 0 |",
+      "| zoom | 1 | zoom-1.json.gz | 10 | 0 | 6 | 1 | 2 | 9 | 0 | 5 | 1 | 1 | 0 |",
     );
     expect(lines[runsSeparatorIndex + 4]).toBe(
-      "| zoom | 2 | zoom-2.json.gz | 20 | 16 | 1 | 2 | 19 | 15 | 1 | 1 | 0 |",
+      "| zoom | 2 | zoom-2.json.gz | 20 | 0 | 16 | 1 | 2 | 19 | 0 | 15 | 1 | 1 | 0 |",
     );
     expect(markdown).toContain("## Runs");
     expect(mainSeparatorIndex).toBeLessThan(runsSeparatorIndex);

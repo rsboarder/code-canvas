@@ -1,7 +1,38 @@
 import type { CameraView } from "../../board/index";
 import type { Rect } from "../../shared/geometry/geometry";
 import type { Viewport } from "../viewport";
-import { viewBoundsAtZoom } from "./tile-sets";
+
+interface ZoomViewBoundsInput {
+  readonly cameraOffsetX: number;
+  readonly cameraOffsetY: number;
+  readonly currentZoom: number;
+  readonly targetZoom: number;
+  readonly focusX: number;
+  readonly focusY: number;
+  readonly viewportWidth: number;
+  readonly viewportHeight: number;
+}
+
+interface ZoomViewBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+export function viewBoundsAtZoom(
+  input: ZoomViewBoundsInput,
+  out: ZoomViewBounds,
+): void {
+  const focusWorldX = (input.focusX - input.cameraOffsetX) / input.currentZoom;
+  const focusWorldY = (input.focusY - input.cameraOffsetY) / input.currentZoom;
+  out.left = focusWorldX - input.focusX / input.targetZoom;
+  out.top = focusWorldY - input.focusY / input.targetZoom;
+  out.right =
+    focusWorldX + (input.viewportWidth - input.focusX) / input.targetZoom;
+  out.bottom =
+    focusWorldY + (input.viewportHeight - input.focusY) / input.targetZoom;
+}
 
 const zoomBoundsInput = {
   cameraOffsetX: 0,

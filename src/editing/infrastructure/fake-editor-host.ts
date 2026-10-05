@@ -20,6 +20,7 @@ export class FakeEditorHost implements EditorHost {
   lastBounds: Rect | undefined;
   lastZoom = 1;
   lastCursor: EditorCursor | undefined;
+  private scrollTop = 0;
   suggestWidgetOpen = false;
   findWidgetOpen = false;
   private readonly listeners = new Set<() => void>();
@@ -43,6 +44,7 @@ export class FakeEditorHost implements EditorHost {
     this.currentValue = options.text;
     this.lastOptions = options;
     this.lastCursor = options.cursor;
+    this.scrollTop = 0;
     this.openCount += 1;
     this.isOpen = true;
     this.readOnly = false;
@@ -68,6 +70,14 @@ export class FakeEditorHost implements EditorHost {
 
   setPosition(cursor: EditorCursor): void {
     this.lastCursor = cursor;
+  }
+
+  setScrollTop(scrollTop: number): void {
+    this.scrollTop = scrollTop;
+  }
+
+  getScrollTop(): number {
+    return this.scrollTop;
   }
 
   getPosition(): EditorCursor | undefined {

@@ -12,79 +12,15 @@ export const TILE_DEVICE_SIZE = 512;
 // Tiles beyond the strictly-visible range, kept resident so a small pan does
 // not stall on a freshly empty tile (D6 "Tile pool": "a one-tile margin
 // ring").
-const MARGIN_RING_TILES = 1;
+export const MARGIN_RING_TILES = 1;
 
 interface TileCoordinate {
   readonly column: number;
   readonly row: number;
 }
 
-export function rasterScaleFor(zoom: number, devicePixelRatio: number): number {
-  return zoom * devicePixelRatio;
-}
-
 export function tileContentSize(rasterScale: number): number {
   return TILE_DEVICE_SIZE / rasterScale;
-}
-
-interface TilePlanInput {
-  readonly contentWidth: number;
-  readonly contentHeight: number;
-  readonly visibleLeft: number;
-  readonly visibleTop: number;
-  readonly visibleRight: number;
-  readonly visibleBottom: number;
-  readonly contentScroll: number;
-  readonly zoom: number;
-  readonly devicePixelRatio: number;
-}
-
-function clampedRange(
-  visibleStart: number,
-  visibleEnd: number,
-  size: number,
-  contentExtent: number,
-): { readonly first: number; readonly last: number } | undefined {
-  if (contentExtent <= 0) return undefined;
-  const maxIndex = Math.max(0, Math.ceil(contentExtent / size) - 1);
-  const first = Math.max(
-    0,
-    Math.floor(visibleStart / size) - MARGIN_RING_TILES,
-  );
-  const last = Math.min(
-    maxIndex,
-    Math.floor(visibleEnd / size) + MARGIN_RING_TILES,
-  );
-  if (last < first) return undefined;
-  return { first, last };
-}
-
-// Pure: every call recomputes the same result from its inputs, so the
-// per-frame caller (GpuUploaderAdapter) only invokes it when the camera,
-// viewport or content actually changed rather than on every tick.
-export function planVisibleTiles(input: TilePlanInput): TileCoordinate[] {
-  const rasterScale = rasterScaleFor(input.zoom, input.devicePixelRatio);
-  const size = tileContentSize(rasterScale);
-  const columns = clampedRange(
-    input.visibleLeft,
-    input.visibleRight,
-    size,
-    input.contentWidth,
-  );
-  const rows = clampedRange(
-    input.visibleTop + input.contentScroll,
-    input.visibleBottom + input.contentScroll,
-    size,
-    input.contentHeight,
-  );
-  if (!columns || !rows) return [];
-  const tiles: TileCoordinate[] = [];
-  for (let row = rows.first; row <= rows.last; row += 1) {
-    for (let column = columns.first; column <= columns.last; column += 1) {
-      tiles.push({ column, row });
-    }
-  }
-  return tiles;
 }
 
 export function tileKeyFor(

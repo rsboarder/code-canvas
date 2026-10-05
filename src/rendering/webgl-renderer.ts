@@ -9,6 +9,7 @@ import type {
   ThemePalette,
 } from "../code-view/index";
 import type { FontDefinition } from "../shared/font";
+import type { GesturePhase } from "../shared/frame";
 import type { Rect } from "../shared/geometry/geometry";
 import { CANVAS_CLEAR_COLOR } from "./clear-color";
 import { BackgroundPass } from "./passes/background-pass";
@@ -18,7 +19,12 @@ import { GpuUploaderAdapter } from "./scene/gpu-uploader";
 import { WidgetTableTexture } from "./scene/widget-table-texture";
 import { MAX_WIDGET_ROWS, WidgetTable } from "./scene/widget-table";
 import type { WidgetId, WidgetTableBoard } from "./scene/widget-table";
-import type { TileDebugSnapshot, TileDemand } from "./scene/tile-residency";
+import type {
+  TileDebugSnapshot,
+  TileDemand,
+  TileResidency,
+} from "./scene/tile-residency";
+import type { RenderingProbeSource } from "./probe";
 import {
   bodyViewWindow,
   type BodyViewWindowInput,
@@ -28,7 +34,7 @@ import {
   type MutableLineRange,
   visibleLineRange,
 } from "./scene/visible-line-ranges";
-import type { CodeTextMetrics, TextMetricsProbe } from "./text/text-metrics";
+import type { CodeTextMetrics } from "./text/text-metrics";
 import type { Viewport } from "./viewport";
 
 export class WebGlRenderer implements GpuUploader {
@@ -37,6 +43,7 @@ export class WebGlRenderer implements GpuUploader {
   private tableTexture: WidgetTableTexture;
   private background: BackgroundPass;
   private readonly uploader: GpuUploaderAdapter;
+  private readonly probe: RenderingProbeSource;
   private readonly tileDraw: TileDrawContext;
   private readonly viewport: Viewport = {
     width: 0,
@@ -70,6 +77,9 @@ export class WebGlRenderer implements GpuUploader {
   private gestureInProgress = false;
   private contextLost = false;
   private redrawCallback: (() => void) | undefined;
+  private hiddenBodyId: string | undefined;
+  private priorityFileId: string | undefined;
+  private gesturePhase: GesturePhase | undefined;
   private lastMetrics: FrameDrawMetrics = {
     tileMemoryBytes: 0,
     missingTile: false,
@@ -117,6 +127,11 @@ export class WebGlRenderer implements GpuUploader {
       table: this.table,
       tableTexture: this.tableTexture.texture,
     });
+    this.probe = {
+      lineWindows: this.uploader.lineWindows,
+      baseline: metrics.baseline,
+      tileDebug: (fileId) => this.debugSnapshot(fileId),
+    };
     this.tileDraw = {
       camera: new Camera(),
       viewport: { width: 0, height: 0, devicePixelRatio: 1 },
@@ -136,12 +151,9 @@ export class WebGlRenderer implements GpuUploader {
     });
   }
 
-  setDocument(fileId: string, path: string): void {
-    this.uploader.setDocument(fileId, path);
-  }
-
   setFilePaths(paths: ReadonlyMap<string, string>): void {
     this.uploader.setFilePaths(paths);
+    this.residency.setFilePaths(paths);
   }
 
   setMinimapFiles(fileIds: readonly string[]): void {
@@ -154,22 +166,10 @@ export class WebGlRenderer implements GpuUploader {
     this.tableTexture.upload(this.table);
   }
 
-  getTextMetricsProbe(): TextMetricsProbe {
-    return this.uploader.getTextMetricsProbe();
-  }
-
-  cellColors(): { cluster: string; colorIndex: number }[][] {
-    return this.uploader.cellColors();
-  }
-
-  setVisibleRange(start: number, end: number): void {
-    this.uploader.setVisibleRange(start, end);
-  }
-
   setDetailLevel(detail: DetailLevelName, textWanted: boolean): void {
     this.detail = detail;
     this.textWanted = textWanted;
-    this.uploader.setDetailLevel(detail === "minimap", textWanted);
+    this.residency.setDetailLevel(detail === "minimap", textWanted);
   }
 
   cull(camera: CameraView): ReadonlyMap<string, readonly LineRange[]> {
@@ -212,16 +212,13 @@ export class WebGlRenderer implements GpuUploader {
       this.visibleRanges.set(id, ranges);
   }
 
-  beginTextPrefetch(thresholdZoom: number): void {
-    this.uploader.beginTextPrefetch(thresholdZoom);
-  }
-
   textReady(): boolean {
-    return this.uploader.textReady();
+    return this.residency.textReady();
   }
 
   setHiddenBody(fileId: string | undefined): void {
-    this.uploader.setHiddenBody(fileId);
+    this.hiddenBodyId = fileId;
+    this.residency.setHiddenBody(fileId);
   }
 
   uploadLineWindow(window: LineWindow): void {
@@ -232,16 +229,12 @@ export class WebGlRenderer implements GpuUploader {
     this.uploader.uploadMinimap(minimap);
   }
 
-  highlighted(): boolean {
-    return this.uploader.highlighted();
-  }
-
   rasterError(): string | undefined {
-    return this.uploader.rasterError();
+    return this.residency.rasterError();
   }
 
   settled(): boolean {
-    return this.uploader.settled();
+    return !this.contextLost && this.residency.settled();
   }
 
   // A raster result arrives asynchronously, outside any FrameLoop tick
@@ -249,39 +242,34 @@ export class WebGlRenderer implements GpuUploader {
   // loop never goes idle with resident work still waiting.
   onNeedsRedraw(callback: () => void): void {
     this.redrawCallback = callback;
-    this.uploader.onNeedsRedraw(callback);
+    this.residency.onNeedsRedraw(callback);
   }
 
-  debugSnapshot(): TileDebugSnapshot {
-    return this.uploader.debugSnapshot();
+  debugSnapshot(fileId?: string): TileDebugSnapshot {
+    return this.residency.debugSnapshot(fileId);
   }
 
   tileDemand(out: TileDemand): void {
-    this.uploader.tileDemand(out);
+    this.residency.tileDemand(out);
   }
 
-  tilesCurrentFor(widgetId: string, contentVersion: number): boolean {
-    return this.uploader.tilesCurrentFor(widgetId, contentVersion);
+  exitViewCovered(widgetId: string, contentVersion: number): boolean {
+    return this.residency.exitViewCovered(widgetId, contentVersion);
   }
 
   frameMetrics(): FrameDrawMetrics {
     return this.lastMetrics;
   }
 
-  setGestureInProgress(inProgress: boolean): void {
-    this.gestureInProgress = inProgress;
+  setPriorityFile(fileId: string | undefined): void {
+    this.priorityFileId = fileId;
+    this.residency.setPriorityFile(fileId);
   }
 
-  setZoomGestureActive(active: boolean): void {
-    this.uploader.setZoomGestureActive(active);
-  }
-
-  setZoomFocus(x: number, y: number, zoomOut: boolean): void {
-    this.uploader.setZoomFocus(x, y, zoomOut);
-  }
-
-  notifyGestureEnded(wasZoom: boolean, cameraScale: number): void {
-    this.uploader.notifyGestureEnded(wasZoom, cameraScale);
+  setGesturePhase(phase: GesturePhase): void {
+    this.gesturePhase = phase;
+    this.gestureInProgress = phase.gestureInProgress;
+    this.residency.setGesturePhase(phase);
   }
 
   // Posts raster jobs and uploads tiles that came back (design D7
@@ -291,12 +279,13 @@ export class WebGlRenderer implements GpuUploader {
     const deadline = performance.now() + budgetMs;
     if (this.contextLost) return 0;
     const canvas = this.gl.canvas as HTMLCanvasElement;
-    return this.uploader.drainTiles(
+    const uploadedTiles = this.residency.drainTiles(
       camera,
       this.cssViewport(canvas),
       this.bodyTopCss,
       deadline,
     );
+    return uploadedTiles + this.uploader.drainRestoredMinimaps();
   }
 
   draw(camera: CameraView): FrameDrawMetrics {
@@ -331,7 +320,7 @@ export class WebGlRenderer implements GpuUploader {
     this.gl.enable(this.gl.DEPTH_TEST);
     this.gl.depthFunc(this.gl.LEQUAL);
     this.gl.depthMask(false);
-    const metrics = this.uploader.buildFrameInstances(
+    const metrics = this.residency.buildFrameInstances(
       this.detail === "minimap",
     );
     this.lastMetrics = metrics;
@@ -347,12 +336,12 @@ export class WebGlRenderer implements GpuUploader {
         this.tileDraw.viewport,
       );
       this.tileDraw.titleOnly = true;
-      this.uploader.drawTiles(this.tileDraw);
+      this.residency.draw(this.tileDraw);
       return;
     }
     this.lastMetrics.drawnMinimapCount = 0;
     this.tileDraw.titleOnly = false;
-    this.uploader.drawTiles(this.tileDraw);
+    this.residency.draw(this.tileDraw);
   }
 
   private configureContextState(): void {
@@ -372,10 +361,23 @@ export class WebGlRenderer implements GpuUploader {
       this.bodyTopCss,
     );
     this.uploader.restore(this.tableTexture.texture);
+    this.residency.setDetailLevel(this.detail === "minimap", this.textWanted);
+    this.residency.setHiddenBody(this.hiddenBodyId);
+    this.residency.setPriorityFile(this.priorityFileId);
+    if (this.gesturePhase) this.residency.setGesturePhase(this.gesturePhase);
+    if (this.redrawCallback) this.residency.onNeedsRedraw(this.redrawCallback);
     this.configureContextState();
     this.contextLost = false;
     this.uploader.setContextLost(false);
     this.redrawCallback?.();
+  }
+
+  probeSource(): RenderingProbeSource {
+    return this.probe;
+  }
+
+  private get residency(): TileResidency {
+    return this.uploader.residency;
   }
 
   private cssViewport(canvas: HTMLCanvasElement): Viewport {

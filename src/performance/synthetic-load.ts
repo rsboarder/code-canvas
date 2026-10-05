@@ -7,7 +7,7 @@ interface SyntheticLoadStage {
   readonly name: "synthetic-load";
   isActive(): boolean;
   setLoad(load: SyntheticLoad): void;
-  run(): void;
+  run(): boolean;
 }
 
 export function createSyntheticLoadStage(
@@ -28,7 +28,7 @@ export function createSyntheticLoadStage(
     run: () => {
       busyWait(load.cpuMs);
       if (load.gpuIterations > 0) drawGpu(load.gpuIterations);
-      if (isActive(load)) invalidate();
+      return isActive(load);
     },
   };
 }

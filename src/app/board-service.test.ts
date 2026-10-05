@@ -296,6 +296,30 @@ describe("BoardService dirty widgets", () => {
     service.bringToFront(topId);
     expect(service.drainDirtyWidgets(out)).toBe(0);
   });
+
+  it("clamps absolute content scroll and avoids dirtying when unchanged", () => {
+    const { service } = createService();
+    service.restoreBoard(
+      workspaceFolderId("folder-1"),
+      [file("a.ts", 100)],
+      undefined,
+      viewport,
+    );
+    const id = sourceFileId("a.ts");
+    service.drainDirtyWidgets([]);
+    const row = createWidgetRow();
+    service.readWidget(id, row);
+    const revision = service.savedLayoutRevision;
+
+    const applied = service.setContentScroll(id, Number.MAX_SAFE_INTEGER);
+    expect(applied).toBe(row.maxContentScroll);
+    expect(service.drainDirtyWidgets([])).toBe(1);
+    expect(service.savedLayoutRevision).toBe(revision + 1);
+
+    expect(service.setContentScroll(id, applied)).toBe(applied);
+    expect(service.drainDirtyWidgets([])).toBe(0);
+    expect(service.savedLayoutRevision).toBe(revision + 1);
+  });
 });
 
 describe("BoardService content events", () => {

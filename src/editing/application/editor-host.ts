@@ -1,4 +1,13 @@
+import {
+  LINE_NUMBER_GAP_CSS,
+  MIN_LINE_NUMBER_DIGITS,
+} from "../../code-view/index";
 import type { Rect } from "../../shared/geometry/geometry";
+
+export const EDITOR_LINE_NUMBER_LAYOUT = {
+  minChars: MIN_LINE_NUMBER_DIGITS,
+  decorationsWidth: LINE_NUMBER_GAP_CSS,
+} as const;
 
 export interface EditorCursor {
   readonly lineNumber: number;
@@ -24,6 +33,8 @@ export interface EditorHost {
   setReadOnly(readOnly: boolean): void;
   setBounds(bounds: Rect, zoom: number): void;
   setPosition(cursor: EditorCursor): void;
+  setScrollTop(scrollTop: number): void;
+  getScrollTop(): number;
   getPosition(): EditorCursor | undefined;
   getValue(): string;
   getLineCount(): number;

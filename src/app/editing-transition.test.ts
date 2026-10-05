@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { BoardService, type BoardMetrics } from "../board/index";
-import { DocumentResidency, type Tokenizer } from "../code-view/index";
+import {
+  BoardService,
+  createWidgetRow,
+  type BoardMetrics,
+} from "../board/index";
+import {
+  DocumentResidency,
+  LineNumberGutter,
+  type Tokenizer,
+} from "../code-view/index";
 import {
   EditingTransition,
   type EditingEndReason,
@@ -19,6 +27,7 @@ import { InMemoryDirectory } from "../workspace/infrastructure/in-memory-directo
 
 const folder = { id: workspaceFolderId("editing-tests"), name: "editing" };
 const fileId = sourceFileId("file.ts");
+const gutter = new LineNumberGutter(8.4);
 const metrics: BoardMetrics = {
   baseLineHeight: 20,
   headerHeight: 24,
@@ -57,6 +66,13 @@ function directoryFiles(
 
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function longSource(lineCount = 100): string {
+  return Array.from(
+    { length: lineCount },
+    (_, index) => `const line${String(index + 1)} = ${String(index + 1)};`,
+  ).join("\n");
 }
 
 async function setup(
@@ -116,6 +132,7 @@ async function setup(
       lineHeight: 20,
       advanceFor: () => 8.4,
     },
+    gutter,
     tilesCurrent: () => tilesCurrent || rasterError,
     onOpened: () => undefined,
   });
@@ -164,7 +181,6 @@ describe("EditingTransition", () => {
     expect(environment.editor.visible).toBe(true);
     expect(environment.transition.takeFrameSwap()).toBeUndefined();
   });
-
   it("saves edits and exits with the pending pan", async () => {
     const environment = await setup();
     environment.residency.visibleRangesChanged(
@@ -192,7 +208,10 @@ describe("EditingTransition", () => {
     environment.changed.length = 0;
     await openEditor(environment);
     environment.transition.takeFrameSwap();
+    environment.setTilesCurrent(false);
     expect(environment.transition.end("escape")).toBe(true);
+    expect(environment.transition.takeFrameSwap()).toBeUndefined();
+    environment.setTilesCurrent(true);
     expect(environment.transition.takeFrameSwap()?.direction).toBe("exit");
     expect(environment.editor.closeCount).toBe(1);
     expect(environment.changed).toEqual([]);
@@ -204,6 +223,27 @@ describe("EditingTransition", () => {
     environment.board.setCamera(0, 0, 1.37);
     await openEditor(environment);
     expect(environment.board.camera.scale).toBe(1.37);
+  });
+
+  it("hands the widget scroll to Monaco on enter and back on exit", async () => {
+    const text = longSource();
+    const environment = await setup(text);
+    expect(environment.board.scrollWidget(fileId, 300)).toBe(300);
+
+    await openEditor(environment);
+    expect(environment.editor.getScrollTop()).toBe(300);
+    environment.transition.takeFrameSwap();
+
+    environment.editor.setScrollTop(99999);
+    environment.editor.setValue(text.replace("line1", "changed"));
+    environment.setTilesCurrent(false);
+    expect(environment.transition.end("escape")).toBe(true);
+
+    const row = environment.board.readWidget(fileId, createWidgetRow());
+    expect(row.contentScroll).toBe(row.maxContentScroll);
+    expect(environment.transition.takeFrameSwap()).toBeUndefined();
+    environment.setTilesCurrent(true);
+    expect(environment.transition.takeFrameSwap()?.direction).toBe("exit");
   });
 });
 
@@ -359,13 +399,15 @@ describe("EditingTransition workspace reads", () => {
   });
 
   it("uses the content point for the cursor", async () => {
-    const environment = await setup("one\ntwo\nthree\n");
-    expect(environment.transition.begin(fileId, { x: 0, y: 20 })).toBe(true);
+    const environment = await setup("abcdef\ntwo\nthree\n");
+    expect(
+      environment.transition.begin(fileId, {
+        x: gutter.codeLeft(4) + 35.6,
+        y: 0,
+      }),
+    ).toBe(true);
     await flush();
-    expect(environment.editor.lastCursor).toEqual({
-      lineNumber: 2,
-      column: 1,
-    });
+    expect(environment.editor.lastCursor).toEqual({ lineNumber: 1, column: 5 });
   });
 
   it("does not open after detail level changes from Text", async () => {

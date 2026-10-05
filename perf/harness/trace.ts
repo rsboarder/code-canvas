@@ -71,6 +71,7 @@ export interface FrameCounts {
   readonly partiallyPresented: number;
   readonly dropped: number;
   readonly idle: number;
+  readonly wakeUp?: number;
 }
 
 export interface TraceMetrics {
@@ -207,13 +208,14 @@ export async function classifyTrace(
     events,
     modelFrames,
   );
-  const intervals = presentedIntervalsMs(framesInWindow);
+  const wakeUpFrameTimes = collectWakeUpFrameTimes(events);
+  const intervals = presentedIntervalsMs(framesInWindow, wakeUpFrameTimes);
   const bridge = options.bridgeMetrics ?? unavailableBridgeMetrics();
   return {
     valid: true,
     frameSource: "DevToolsFrameModel",
-    frames: frameModelCounts(modelFramesInWindow),
-    traceFrames: frameModelCounts(modelFrames),
+    frames: frameModelCounts(modelFramesInWindow, wakeUpFrameTimes),
+    traceFrames: frameModelCounts(modelFrames, wakeUpFrameTimes),
     pipelineFrames: frameCounts(framesInWindow),
     intervalsMs: intervalStatistics(intervals),
     intervalsOver12_5Ms: countLongIntervals(intervals, 12.5),
@@ -309,6 +311,26 @@ function isInputDispatchEvent(event: TraceEvent): boolean {
   );
 }
 
+function collectWakeUpFrameTimes(events: TraceEvents): ReadonlySet<number> {
+  const frameTimes = new Set<number>();
+  for (const event of events) {
+    if (
+      event.name !== "Scheduler::BeginImplFrame" ||
+      event.ph !== "X" ||
+      !hasCategory(event.cat, "cc")
+    ) {
+      continue;
+    }
+    const eventArgs = isRecord(event.args) ? event.args.args : undefined;
+    if (!isRecord(eventArgs) || eventArgs.subtype !== "MISSED") continue;
+    const frameTime = eventArgs.frame_time_us;
+    if (typeof frameTime === "number" && Number.isFinite(frameTime)) {
+      frameTimes.add(frameTime);
+    }
+  }
+  return frameTimes;
+}
+
 function frameCounts(frames: readonly TraceEvent[]): TraceMetrics["frames"] {
   const statuses = frames.map(frameState);
   return {
@@ -330,6 +352,7 @@ function frameCounts(frames: readonly TraceEvent[]): TraceMetrics["frames"] {
 
 function frameModelCounts(
   frames: readonly Types.Events.LegacyTimelineFrame[],
+  wakeUpFrameTimes: ReadonlySet<number>,
 ): FrameCounts {
   const counts = {
     total: frames.length,
@@ -337,8 +360,13 @@ function frameModelCounts(
     partiallyPresented: 0,
     dropped: 0,
     idle: 0,
+    wakeUp: 0,
   };
   for (const frame of frames) {
+    if (wakeUpFrameTimes.has(frame.startTime)) {
+      counts.wakeUp += 1;
+      continue;
+    }
     if (frame.isPartial) {
       counts.partiallyPresented += 1;
       continue;
@@ -356,7 +384,10 @@ function frameModelCounts(
   return counts;
 }
 
-function presentedIntervalsMs(frames: readonly TraceEvent[]): number[] {
+function presentedIntervalsMs(
+  frames: readonly TraceEvent[],
+  wakeUpFrameTimes: ReadonlySet<number>,
+): number[] {
   // Match spike C: only STATE_PRESENTED_ALL timestamps define presentation
   // intervals, so idle/no-damage pipeline records never become frame gaps.
   const presented = frames.filter(
@@ -367,7 +398,12 @@ function presentedIntervalsMs(frames: readonly TraceEvent[]): number[] {
     const previous = presented[index - 1];
     const current = presented[index];
     if (!previous || !current) continue;
-    if (isIdleGap(frames, previous.ts, current.ts)) continue;
+    if (wakeUpFrameTimes.has(previous.ts) || wakeUpFrameTimes.has(current.ts)) {
+      continue;
+    }
+    if (isIdleGap(frames, previous.ts, current.ts, wakeUpFrameTimes)) {
+      continue;
+    }
     intervals.push((current.ts - previous.ts) / 1_000);
   }
   return intervals;
@@ -377,14 +413,28 @@ function isIdleGap(
   frames: readonly TraceEvent[],
   startTs: number,
   endTs: number,
+  wakeUpFrameTimes: ReadonlySet<number>,
 ): boolean {
   let hasIdleFrame = false;
   for (const frame of frames) {
     if (frame.ts <= startTs || frame.ts >= endTs) continue;
-    if (frameState(frame) !== "STATE_NO_UPDATE_DESIRED") return false;
+    if (
+      frameState(frame) !== "STATE_NO_UPDATE_DESIRED" &&
+      !frameDoesNotAffectSmoothness(frame) &&
+      !wakeUpFrameTimes.has(frame.ts)
+    ) {
+      return false;
+    }
     hasIdleFrame = true;
   }
   return hasIdleFrame;
+}
+
+function frameDoesNotAffectSmoothness(event: TraceEvent): boolean {
+  const args = event.args;
+  if (!args) return false;
+  const reporter = args.frame_reporter ?? args.chrome_frame_reporter;
+  return isRecord(reporter) && reporter.affects_smoothness === false;
 }
 
 function intervalStatistics(values: readonly number[]): IntervalStatistics {

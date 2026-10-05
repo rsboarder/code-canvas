@@ -1,8 +1,4 @@
-import type {
-  EncodedRasterCells,
-  RasterCellInput,
-  RasterResult,
-} from "../text/raster-job";
+import type { RasterResult } from "../text/raster-job";
 import { encodeRasterCells } from "../text/raster-job";
 import { RasterWorkerPool } from "../text/raster-worker-pool";
 import type { CodeTextMetrics } from "../text/text-metrics";
@@ -10,61 +6,35 @@ import {
   CONTENT_KIND,
   HEADER_KIND,
   LABEL_KIND,
-  TileRecords,
-} from "./tile-records";
-import { TILE_DEVICE_SIZE, tileContentSize } from "./tile-plan";
-import { TILE_CELL_HEIGHT } from "./tile-pool";
+  type TileRecordView,
+} from "./widget-tile-set";
+import {
+  type TileKindRecordReader,
+  usesCell,
+  writeTileKindJob,
+  type TileContentSource,
+} from "./tile-kind-jobs";
 import type { TilePool } from "./tile-pool";
-import type { TileSetPlanner } from "./tile-sets";
 
 const MAX_JOBS_PER_FRAME = 4;
 
-export interface TileContentSource {
-  readonly fileId: string;
-  readonly filePath: string;
-  readonly hasText: boolean;
-  readonly contentVersion: number;
-  readonly highlighted: boolean;
-  readonly contentWidth: number;
-  readonly contentHeight: number;
-  readonly palette: readonly string[];
-  readonly baseline: number;
-  readonly lineHeight: number;
-  readonly backgroundColor: string;
-  readonly headerBackgroundColor: string;
-  cellsFor(
-    column: number,
-    row: number,
-    rasterScale: number,
-  ): EncodedRasterCells;
-  headerCellsFor(column: number, rasterScale: number): EncodedRasterCells;
-  readonly label?: TileLabelContentSource;
-}
-
-export interface TileLabelContentSource {
-  readonly identity: string;
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-  jobFor(rasterScale: number): {
-    readonly cells: readonly RasterCellInput[];
-    readonly font: string;
-    readonly baseline: number;
-    readonly lineHeight: number;
-    readonly originY: number;
-    readonly backgroundColor: string;
-    readonly palette: readonly string[];
-    readonly outlineColor: string;
-    readonly outlineWidth: number;
-  };
-}
-
-export interface TileJobOwner {
-  readonly records: TileRecords;
-  readonly planner: TileSetPlanner;
+export interface TileJobOwner extends TileKindRecordReader {
   readonly contentSource: TileContentSource | undefined;
   readonly epoch: number;
+  readonly recordCapacity: number;
+  readRecord(record: number): TileRecordView;
+  recordKey(record: number): string | undefined;
+  recordEpoch(record: number): number;
+  findRecordByKey(key: string): number;
+  releaseRecord(record: number): void;
+  deactivateRecordByKey(key: string): void;
+  setRecordPending(record: number, pending: boolean): void;
+  setRecordReady(record: number, ready: boolean): void;
+  setRequestedContentVersion(record: number, version: number): void;
+  isRecordActive(record: number): boolean;
+  drawRecords(kind: number, fallback: boolean): Int32Array;
+  drawRecordCount(kind: number, fallback: boolean): number;
+  prefetchScale(): number;
   isResultCurrent(
     record: number,
     result: Pick<RasterResult, "rasterScale" | "contentVersion">,
@@ -85,8 +55,8 @@ export class TileJobQueue {
     originY: 0,
     outlineColor: "",
     outlineWidth: 0,
-    width: TILE_DEVICE_SIZE,
-    height: TILE_DEVICE_SIZE,
+    width: 0,
+    height: 0,
     cells: encodeRasterCells([]),
   };
   private jobsPosted = 0;
@@ -129,26 +99,29 @@ export class TileJobQueue {
   }
 
   ensureTile(owner: TileJobOwner, record: number): void {
-    const key = owner.records.keys[record];
+    const view = owner.readRecord(record);
+    const key = view.key;
     const source = owner.contentSource;
     if (!key || !source) return;
     this.config.pool.touch(key);
-    if (owner.records.records.ready[record] || owner.records.pending[record])
-      return;
+    if (view.ready || view.pending) return;
     if (this.jobsPosted >= MAX_JOBS_PER_FRAME) return;
     if (this.jobsPosted > 0 && performance.now() >= this.deadline) return;
     const acquired = this.config.pool.acquire(
       key,
       false,
-      usesCell(owner.records, record),
+      usesCell(owner, record),
     );
     if (acquired.slot < 0) return;
     if (acquired.evictedKey) {
       const evictedOwner = this.config.ownerForKey(acquired.evictedKey);
-      evictedOwner?.records.deactivateByKey(acquired.evictedKey);
+      evictedOwner?.deactivateRecordByKey(acquired.evictedKey);
     }
-    owner.records.pending[record] = 1;
-    this.postJob(owner, record);
+    owner.setRecordPending(record, true);
+    if (!this.postJob(owner, record)) {
+      owner.releaseRecord(record);
+      return;
+    }
     this.jobsPosted += 1;
     this.postedTotalValue += 1;
   }
@@ -159,78 +132,52 @@ export class TileJobQueue {
     this.jobsInFlight = Math.max(0, this.jobsInFlight - results.length);
     for (const result of results) {
       const owner = ownerForKey(result.tileKey);
-      const record = owner?.records.findRecordByKey(result.tileKey) ?? -1;
+      const record = owner?.findRecordByKey(result.tileKey) ?? -1;
       if (!owner || record < 0 || !owner.isResultCurrent(record, result)) {
         result.bitmap.close();
         this.staleTotalValue += 1;
-        if (owner && record >= 0) owner.records.releaseRecord(record);
+        if (owner && record >= 0) owner.releaseRecord(record);
         continue;
       }
       if (!this.config.pool.upload(result.tileKey, result.bitmap)) {
         result.bitmap.close();
         this.uploadFailedTotalValue += 1;
-        owner.records.releaseRecord(record);
+        owner.releaseRecord(record);
         continue;
       }
       result.bitmap.close();
-      owner.records.pending[record] = 0;
-      owner.records.records.ready[record] = 1;
+      owner.setRecordPending(record, false);
+      owner.setRecordReady(record, true);
       uploadedTiles += 1;
     }
     return uploadedTiles;
   }
 
   unpinRecords(owner: TileJobOwner): void {
-    const records = owner.records;
-    for (let index = 0; index < records.records.active.length; index += 1) {
-      if (!records.records.active[index]) continue;
-      const key = records.keys[index];
+    for (let index = 0; index < owner.recordCapacity; index += 1) {
+      if (!owner.isRecordActive(index)) continue;
+      const key = owner.recordKey(index);
       if (key) this.config.pool.setPinned(key, false);
     }
   }
 
   pinDrawSet(owner: TileJobOwner): void {
-    const planner = owner.planner;
-    this.pinRecords(
-      owner.records,
-      planner.drawFallback,
-      planner.drawFallbackCount,
-    );
-    this.pinRecords(
-      owner.records,
-      planner.drawCurrent,
-      planner.drawCurrentCount,
-    );
-    this.pinRecords(
-      owner.records,
-      planner.drawHeaderFallback,
-      planner.drawHeaderFallbackCount,
-    );
-    this.pinRecords(
-      owner.records,
-      planner.drawHeaderCurrent,
-      planner.drawHeaderCurrentCount,
-    );
-    this.pinRecords(
-      owner.records,
-      planner.drawLabelFallback,
-      planner.drawLabelFallbackCount,
-    );
-    this.pinRecords(
-      owner.records,
-      planner.drawLabelCurrent,
-      planner.drawLabelCurrentCount,
-    );
-    if (planner.prefetchScale() <= 0) return;
-    const records = owner.records;
-    for (let index = 0; index < records.records.active.length; index += 1) {
+    this.pinRecords(owner, CONTENT_KIND, true);
+    this.pinRecords(owner, CONTENT_KIND, false);
+    this.pinRecords(owner, HEADER_KIND, true);
+    this.pinRecords(owner, HEADER_KIND, false);
+    this.pinRecords(owner, LABEL_KIND, true);
+    this.pinRecords(owner, LABEL_KIND, false);
+    const prefetchScale = owner.prefetchScale();
+    if (prefetchScale <= 0) return;
+    for (let index = 0; index < owner.recordCapacity; index += 1) {
+      if (!owner.isRecordActive(index)) continue;
       if (
-        records.records.active[index] &&
-        records.records.kind[index] === CONTENT_KIND &&
-        records.records.epoch[index] === owner.epoch &&
-        records.records.rasterScale[index] === planner.prefetchScale()
+        owner.recordKind(index) === CONTENT_KIND &&
+        owner.recordEpoch(index) === owner.epoch &&
+        owner.recordRasterScale(index) === prefetchScale
       ) {
-        const key = records.keys[index];
+        const key = owner.recordKey(index);
         if (key) this.config.pool.setPinned(key, true);
       }
     }
@@ -248,77 +195,34 @@ export class TileJobQueue {
     this.workerPool.dispose();
   }
 
-  private postJob(owner: TileJobOwner, record: number): void {
+  private postJob(owner: TileJobOwner, record: number): boolean {
     const source = owner.contentSource;
-    if (!source) return;
-    const kind = owner.records.records.kind[record] ?? CONTENT_KIND;
-    const column = owner.records.records.column[record] ?? 0;
-    const row = owner.records.records.row[record] ?? 0;
-    const rasterScale = owner.records.records.rasterScale[record] ?? 1;
-    const size = tileContentSize(rasterScale);
-    const labelJob =
-      kind === LABEL_KIND ? source.label?.jobFor(rasterScale) : undefined;
-    const cells =
-      kind === HEADER_KIND
-        ? source.headerCellsFor(column, rasterScale)
-        : labelJob
-          ? encodeRasterCells(labelJob.cells)
-          : source.cellsFor(column, row, rasterScale);
-    const key = owner.records.keys[record];
-    if (!key) return;
+    if (!source) return false;
+    const rasterScale = owner.recordRasterScale(record);
+    const key = owner.recordKey(record);
+    if (!key) return false;
     this.rasterJob.tileKey = key;
     this.rasterJob.contentVersion = source.contentVersion;
     this.rasterJob.rasterScale = rasterScale;
-    this.rasterJob.backgroundColor =
-      kind === HEADER_KIND
-        ? source.headerBackgroundColor
-        : source.backgroundColor;
-    this.rasterJob.palette = source.palette;
     this.rasterJob.font = this.config.rasterFont;
-    this.rasterJob.baseline = source.baseline;
-    this.rasterJob.lineHeight = source.lineHeight;
-    this.rasterJob.originY = kind === HEADER_KIND ? 0 : row * size;
-    this.rasterJob.outlineColor = "";
-    this.rasterJob.outlineWidth = 0;
-    const cell = usesCell(owner.records, record);
-    this.rasterJob.width = TILE_DEVICE_SIZE;
-    this.rasterJob.height = cell ? TILE_CELL_HEIGHT : TILE_DEVICE_SIZE;
-    if (labelJob) {
-      this.rasterJob.backgroundColor = labelJob.backgroundColor;
-      this.rasterJob.palette = labelJob.palette;
-      this.rasterJob.font = labelJob.font;
-      this.rasterJob.baseline = labelJob.baseline;
-      this.rasterJob.lineHeight = labelJob.lineHeight;
-      this.rasterJob.originY = labelJob.originY;
-      this.rasterJob.outlineColor = labelJob.outlineColor;
-      this.rasterJob.outlineWidth = labelJob.outlineWidth;
-    }
-    this.rasterJob.cells = cells;
-    owner.records.requestedContentVersion[record] = source.contentVersion;
+    if (!writeTileKindJob(source, owner, record, this.rasterJob)) return false;
+    owner.setRequestedContentVersion(record, source.contentVersion);
     this.workerPool.post(this.rasterJob);
     this.jobsInFlight += 1;
+    return true;
   }
 
   private pinRecords(
-    records: TileRecords,
-    drawRecords: Int32Array,
-    count: number,
+    owner: TileJobOwner,
+    kind: number,
+    fallback: boolean,
   ): void {
+    const drawRecords = owner.drawRecords(kind, fallback);
+    const count = owner.drawRecordCount(kind, fallback);
     for (let index = 0; index < count; index += 1) {
       const record = drawRecords[index] ?? -1;
-      const key = record >= 0 ? records.keys[record] : undefined;
+      const key = record >= 0 ? owner.recordKey(record) : undefined;
       if (key) this.config.pool.setPinned(key, true);
     }
   }
-}
-
-function usesCell(records: TileRecords, record: number): boolean {
-  const kind = records.records.kind[record];
-  if (kind !== HEADER_KIND && kind !== LABEL_KIND) return false;
-  const rasterScale = records.records.rasterScale[record] ?? 1;
-  return (
-    (records.records.height[record] ?? 0) * rasterScale <=
-      TILE_CELL_HEIGHT - 1 &&
-    (records.records.width[record] ?? 0) * rasterScale <= TILE_DEVICE_SIZE
-  );
 }

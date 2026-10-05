@@ -14,11 +14,19 @@ import {
   PINCH_WHEEL_DELTA_PER_LN_SCALE,
 } from "../../src/shared/pinch";
 import {
+  assertHeldExitFrames,
+  type FrameLogEntry,
+  lastFrameTick,
+  readFrameLog,
+  waitForFrame,
+} from "./frame-log";
+import {
   bodyPoint,
   installDirectoryMock,
   openFolder,
   readMockFile,
   readWidgetRects,
+  scrollCanvas,
 } from "./support";
 
 test.describe.configure({ mode: "serial" });
@@ -45,50 +53,6 @@ async function openFile(page: Page, text: string): Promise<void> {
   );
 }
 
-interface FrameLogEntry {
-  readonly tick: number;
-  readonly timeMs: number;
-  readonly drawnTileCount: number;
-  readonly drawnLabelTileCount: number;
-  readonly drawnUnhighlightedTileCount: number;
-  readonly lowestContentVersion: number;
-  readonly editorVisible: boolean;
-  readonly cameraOffsetX: number;
-  readonly cameraOffsetY: number;
-  readonly cameraScale: number;
-}
-
-async function readFrameLog(page: Page): Promise<readonly FrameLogEntry[]> {
-  return page.evaluate(() => {
-    const entries = window.__codeCanvasTest?.frameLog();
-    if (!entries) throw new Error("Code Canvas frame log is missing");
-    return entries;
-  });
-}
-
-async function lastFrameTick(page: Page): Promise<number> {
-  const entries = await readFrameLog(page);
-  return entries[entries.length - 1]?.tick ?? -1;
-}
-
-async function waitForFrame(
-  page: Page,
-  predicate: (entry: FrameLogEntry) => boolean,
-): Promise<FrameLogEntry> {
-  let match: FrameLogEntry | undefined;
-  await expect
-    .poll(
-      async () => {
-        match = (await readFrameLog(page)).find(predicate);
-        return match?.tick ?? -1;
-      },
-      { timeout: 3000 },
-    )
-    .not.toBe(-1);
-  if (!match) throw new Error("Expected frame-log entry is missing");
-  return match;
-}
-
 async function installEscapeKeydownClock(page: Page): Promise<void> {
   await page.evaluate(() => {
     const canvas = document.querySelector<HTMLElement>(
@@ -109,33 +73,6 @@ async function installEscapeKeydownClock(page: Page): Promise<void> {
       { capture: true, once: true },
     );
   });
-}
-
-async function assertHeldExitFrames(
-  page: Page,
-  startTick: number,
-  contentVersion: number,
-): Promise<void> {
-  const entries = (await readFrameLog(page)).filter(
-    (entry) => entry.tick >= startTick,
-  );
-  expect(entries.length).toBeGreaterThan(0);
-  for (const entry of entries) {
-    expect(
-      entry.lowestContentVersion === -1 ||
-        entry.lowestContentVersion >= contentVersion,
-    ).toBe(true);
-    expect(entry.editorVisible || entry.drawnTileCount > 0).toBe(true);
-    expect(entry.drawnLabelTileCount).toBeGreaterThan(0);
-  }
-  const editingEntries = entries.filter((entry) => entry.editorVisible);
-  const stationary = editingEntries[0];
-  if (!stationary) throw new Error("No held editing frame was logged");
-  for (const entry of editingEntries) {
-    expect(entry.cameraOffsetX).toBe(stationary.cameraOffsetX);
-    expect(entry.cameraOffsetY).toBe(stationary.cameraOffsetY);
-    expect(entry.cameraScale).toBe(stationary.cameraScale);
-  }
 }
 
 async function assertHighlightingAfterEdit(
@@ -202,13 +139,21 @@ async function pinchWithCdp(page: Page, target: number): Promise<void> {
 }
 
 test("Double click on a line", async ({ page }) => {
-  const text = "abcdefghij\nklmnopqrst\n";
+  const text = Array.from(
+    { length: 100 },
+    (_, index) => `const line${String(index + 1)} = ${String(index + 1)};`,
+  ).join("\n");
   await openFile(page, text);
-  await zoomCanvasTo(page, 1.37);
   const canvas = page.getByTestId("canvas");
+  const targetLineNumber = 42;
+  const firstVisibleText = "const line41 = 41;";
+  await scrollCanvas(page, DEFAULT_CODE_FONT.lineHeight * 80);
+  await zoomCanvasTo(page, 1.37);
   await canvas.dblclick({ position: await bodyPoint(page) });
   await expect(canvas).toHaveAttribute("data-editing", "true");
-  await expect(page.locator(".monaco-editor .view-line").first()).toBeVisible();
+  const viewLine = page.locator(".monaco-editor .view-line").first();
+  await expect(viewLine).toBeVisible();
+  await expect(viewLine).toContainText(firstVisibleText);
   const metrics = await page.evaluate(() => {
     const hook = window.__codeCanvasTest;
     if (!hook) throw new Error("Code Canvas test hook is missing");
@@ -217,12 +162,13 @@ test("Double click on a line", async ({ page }) => {
   const scale = Number(await canvas.getAttribute("data-text-metrics-scale"));
   await page.keyboard.press("Escape");
   await expect(canvas).toHaveAttribute("data-editing", "false");
-  const line = metrics.lines[0] ?? [];
+  const line = metrics.lines[targetLineNumber - 1] ?? [];
   const targetIndex = 4;
   const targetCell = line[targetIndex];
   const nextCell = line[targetIndex + 1];
   if (!targetCell || !nextCell) throw new Error("Cursor probe cell is missing");
   const targetX = targetCell.x + (nextCell.x - targetCell.x) / 4;
+  const codeTargetX = targetX - (line[0]?.x ?? 0);
   const advances = new Map<string, number>();
   for (let index = 0; index < line.length - 1; index += 1) {
     const cell = line[index];
@@ -237,25 +183,24 @@ test("Double click on a line", async ({ page }) => {
     advanceFor: (cluster) => advances.get(cluster) ?? nextCell.x - targetCell.x,
   };
   const expectedColumn = new LineLayout(text, lineMetrics).columnAtX(
-    0,
-    targetX,
+    targetLineNumber - 1,
+    codeTargetX,
   );
-  const body = await page
-    .getByTestId("canvas")
-    .getAttribute("data-widget-body-rect");
+  const body = await canvas.getAttribute("data-widget-body-rect");
   if (!body) throw new Error("Widget body rect is missing");
   const bodyRect = JSON.parse(body) as WidgetBodyRect;
   const point = {
     x: bodyRect.x + targetX * scale,
-    y: bodyRect.y + (DEFAULT_CODE_FONT.lineHeight * scale) / 2,
+    y: bodyRect.y + DEFAULT_CODE_FONT.lineHeight * 1.5 * scale,
   };
   await canvas.dblclick({ position: point });
   await expect(canvas).toHaveAttribute("data-editing", "true");
-  await expect(page.locator(".monaco-editor .view-line").first()).toBeVisible();
+  await expect(viewLine).toBeVisible();
+  await expect(viewLine).toContainText(firstVisibleText);
   const cursor = JSON.parse(
     (await canvas.getAttribute("data-editor-position")) ?? "{}",
-  ) as { readonly lineNumber?: number; readonly column?: number };
-  expect(cursor).toEqual({ lineNumber: 1, column: expectedColumn });
+  ) as Record<string, number>;
+  expect(cursor).toEqual({ lineNumber: 42, column: expectedColumn });
 });
 
 test("Double click on another widget", async ({ page }) => {
@@ -376,6 +321,7 @@ function readGlyphSequencesInBrowser(): readonly GlyphSequenceLine[] {
   const viewLines = editor.querySelector<HTMLElement>(".view-lines");
   if (!viewLines) throw new Error("Monaco view-lines are missing");
   const viewRect = viewLines.getBoundingClientRect();
+  const editorRect = editor.getBoundingClientRect();
   const visibleLines = Array.from(
     editor.querySelectorAll<HTMLElement>(".view-line"),
   );
@@ -430,7 +376,7 @@ function readGlyphSequencesInBrowser(): readonly GlyphSequenceLine[] {
       range.setEnd(location.node, rangeOffset);
       monaco.push({
         cluster: segment,
-        x: range.getBoundingClientRect().left - viewRect.left,
+        x: range.getBoundingClientRect().left - editorRect.left,
         n: location.n,
         tolerance: (scale * location.n) / 128 + 0.05,
       });
@@ -669,6 +615,17 @@ test("Escape", async ({ page }) => {
     "2",
   );
   await assertHeldExitFrames(page, startTick, 2);
+
+  await openFile(page, "const answer = 42;\n".repeat(100));
+  const canvas = page.getByTestId("canvas");
+  await canvas.dblclick({ position: await bodyPoint(page) });
+  await expect(canvas).toHaveAttribute("data-editing", "true");
+  await page.keyboard.press("PageDown");
+  const scrollStartTick = await lastFrameTick(page);
+  await page.keyboard.press("Escape");
+  await expect(canvas).toHaveAttribute("data-editing", "false");
+  await expect(canvas).toHaveAttribute("data-content-version", "1");
+  await assertHeldExitFrames(page, scrollStartTick, 1);
 });
 
 test("Opening without a change", async ({ page }) => {
@@ -770,7 +727,7 @@ test("Escape without edits hides the editor in the first tick", async ({
     })
     .toBeGreaterThan(0);
   const firstAfterEscape = (await readFrameLog(page)).find(
-    (entry) => entry.tick > beforeEscape,
+    (entry: FrameLogEntry) => entry.tick > beforeEscape,
   );
   expect(firstAfterEscape?.editorVisible).toBe(false);
 });
