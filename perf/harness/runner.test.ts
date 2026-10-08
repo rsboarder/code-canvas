@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  previewArguments,
-  previewUrl,
   runMeasuredScenarios,
   type HarnessResult,
   type RunnerFileSystem,
   type ScenarioRunnerDependencies,
 } from "./runner";
+import { previewArguments, previewUrl } from "./harness-session";
 import {
   missingBridgeCommands,
   openReferenceFolder,

@@ -1,16 +1,8 @@
 import { Camera, type CameraView } from "../../../board/index";
 import type { Rect } from "../../../shared/geometry/geometry";
-import type { RasterResult } from "../../text/raster-job";
 import type { Viewport } from "../../viewport";
-import type { TileJobOwner } from "../tile-job-queue";
 import type { TileContentSource } from "../tile-kind-jobs";
-import {
-  CONTENT_KIND,
-  HEADER_KIND,
-  LABEL_KIND,
-  TileRecords,
-  type TileRecordPool,
-} from "./tile-records";
+import { TileRecords } from "./tile-records";
 import {
   createWidgetTileFrameState,
   type WidgetTileFrameState,
@@ -22,25 +14,7 @@ import {
   type ViewWindow,
 } from "../tile-view-window";
 
-export interface TileRecordView {
-  key: string | undefined;
-  active: boolean;
-  ready: boolean;
-  pending: boolean;
-  kind: number;
-  rasterScale: number;
-  epoch: number;
-  contentVersion: number;
-  column: number;
-  row: number;
-  localX: number;
-  localY: number;
-  width: number;
-  height: number;
-  highlighted: boolean;
-}
-
-export class WidgetTiles implements TileJobOwner {
+export class WidgetTiles {
   private readonly frameState: WidgetTileFrameState;
   readonly frame: Rect = { x: 0, y: 0, width: 0, height: 0 };
   readonly visibleWindow: ViewWindow = {
@@ -80,37 +54,13 @@ export class WidgetTiles implements TileJobOwner {
   private labelZoom = Number.NaN;
   private labelFrameWidth = Number.NaN;
   private labelFrameHeight = Number.NaN;
-  private readonly records: TileRecords;
-  private readonly planner: TileSetPlanner;
-  private readonly recordView: TileRecordView = {
-    key: undefined,
-    active: false,
-    ready: false,
-    pending: false,
-    kind: CONTENT_KIND,
-    rasterScale: 1,
-    epoch: 0,
-    contentVersion: -1,
-    column: 0,
-    row: 0,
-    localX: 0,
-    localY: 0,
-    width: 0,
-    height: 0,
-    highlighted: false,
-  };
+  private records: TileRecords;
+  private planner: TileSetPlanner;
 
-  constructor(
-    fileId: string,
-    pool: TileRecordPool,
-    capacity: number,
-    onKeyReleased?: (key: string) => void,
-  ) {
+  constructor(fileId: string, capacity: number) {
     this.fileId = fileId;
     this.frameState = createWidgetTileFrameState();
-    this.records = new TileRecords(pool, capacity, this.frameState, {
-      onKeyReleased,
-    });
+    this.records = new TileRecords(capacity, this.frameState);
     this.planner = new TileSetPlanner(
       this.records.records,
       capacity,
@@ -153,8 +103,16 @@ export class WidgetTiles implements TileJobOwner {
     return this.frameState.epoch;
   }
 
-  get recordCapacity(): number {
-    return this.records.records.active.length;
+  get tileRecords(): TileRecords {
+    return this.records;
+  }
+
+  get plan(): TileSetPlanner {
+    return this.planner;
+  }
+
+  get drawSet(): TileSetPlanner["drawSet"] {
+    return this.planner.drawSetView;
   }
 
   get requestCount(): number {
@@ -169,16 +127,8 @@ export class WidgetTiles implements TileJobOwner {
     return this.planner.requestLabel;
   }
 
-  get requestedScale(): number {
-    return this.planner.requestedScale;
-  }
-
-  get requestedHeaderScale(): number {
-    return this.planner.requestedHeaderScale;
-  }
-
-  get requestedLabelScale(): number {
-    return this.planner.requestedLabelScale;
+  requestScale(kind: number): number {
+    return this.planner.requestScale(kind);
   }
 
   get visibleFirstColumn(): number {
@@ -213,112 +163,8 @@ export class WidgetTiles implements TileJobOwner {
     return this.planner.requestHeaderColumns;
   }
 
-  drawRecords(kind: number, fallback: boolean): Int32Array {
-    if (kind === HEADER_KIND)
-      return fallback
-        ? this.planner.drawHeaderFallback
-        : this.planner.drawHeaderCurrent;
-    if (kind === LABEL_KIND)
-      return fallback
-        ? this.planner.drawLabelFallback
-        : this.planner.drawLabelCurrent;
-    return fallback ? this.planner.drawFallback : this.planner.drawCurrent;
-  }
-
-  drawRecordCount(kind: number, fallback: boolean): number {
-    if (kind === HEADER_KIND)
-      return fallback
-        ? this.planner.drawHeaderFallbackCount
-        : this.planner.drawHeaderCurrentCount;
-    if (kind === LABEL_KIND)
-      return fallback
-        ? this.planner.drawLabelFallbackCount
-        : this.planner.drawLabelCurrentCount;
-    return fallback
-      ? this.planner.drawFallbackCount
-      : this.planner.drawCurrentCount;
-  }
-
-  prefetchScale(): number {
-    return this.planner.prefetchScale();
-  }
-
-  ensureRecord(
-    kind: number,
-    scale: number,
-    column: number,
-    row: number,
-  ): number {
-    return this.records.ensureRecord(kind, scale, column, row);
-  }
-
-  readRecord(record: number): TileRecordView {
-    this.recordView.key = this.records.keys[record];
-    this.recordView.active = this.records.records.active[record] === 1;
-    this.recordView.ready = this.records.records.ready[record] === 1;
-    this.recordView.pending = this.records.pending[record] === 1;
-    this.recordView.kind = this.records.recordKind(record);
-    this.recordView.rasterScale = this.records.recordRasterScale(record);
-    this.recordView.epoch = this.records.records.epoch[record] ?? 0;
-    this.recordView.contentVersion =
-      this.records.records.contentVersion[record] ?? -1;
-    this.recordView.column = this.records.recordColumn(record);
-    this.recordView.row = this.records.recordRow(record);
-    this.recordView.localX = this.records.records.localX[record] ?? 0;
-    this.recordView.localY = this.records.records.localY[record] ?? 0;
-    this.recordView.width = this.records.recordWidth(record);
-    this.recordView.height = this.records.recordHeight(record);
-    this.recordView.highlighted = this.records.highlighted[record] === 1;
-    return this.recordView;
-  }
-
-  recordKey(record: number): string | undefined {
-    return this.records.keys[record];
-  }
-
-  findRecordByKey(key: string): number {
-    return this.records.findRecordByKey(key);
-  }
-
   findRecord(kind: number, scale: number, column: number, row: number): number {
     return this.records.findRecord(kind, scale, column, row);
-  }
-
-  isRecordReady(record: number): boolean {
-    return this.records.records.ready[record] === 1;
-  }
-
-  releaseRecord(record: number): void {
-    this.records.releaseRecord(record);
-  }
-
-  deactivateRecordByKey(key: string): void {
-    this.records.deactivateByKey(key);
-  }
-
-  setRecordPending(record: number, pending: boolean): void {
-    this.records.pending[record] = pending ? 1 : 0;
-  }
-
-  setRecordReady(record: number, ready: boolean): void {
-    this.records.records.ready[record] = ready ? 1 : 0;
-  }
-
-  setRequestedContentVersion(record: number, version: number): void {
-    this.records.requestedContentVersion[record] = version;
-  }
-
-  isRecordActive(record: number): boolean {
-    return this.records.records.active[record] === 1;
-  }
-
-  isRequested(
-    rasterScale: number,
-    column: number,
-    row: number,
-    epoch: number,
-  ): boolean {
-    return this.planner.isRequested(rasterScale, column, row, epoch);
   }
 
   exitViewCovered(contentVersion: number, contentScroll: number): boolean {
@@ -328,60 +174,17 @@ export class WidgetTiles implements TileJobOwner {
     return this.frameState.contentScroll === contentScroll && this.textReady;
   }
 
-  recordKind(record: number): number {
-    return this.records.recordKind(record);
-  }
-
-  recordRasterScale(record: number): number {
-    return this.records.recordRasterScale(record);
-  }
-
-  recordEpoch(record: number): number {
-    return this.records.recordEpoch(record);
-  }
-
-  recordColumn(record: number): number {
-    return this.records.recordColumn(record);
-  }
-
-  recordRow(record: number): number {
-    return this.records.recordRow(record);
-  }
-
-  recordWidth(record: number): number {
-    return this.records.recordWidth(record);
-  }
-
-  recordHeight(record: number): number {
-    return this.records.recordHeight(record);
-  }
-
-  isResultCurrent(
-    record: number,
-    result: Pick<RasterResult, "rasterScale" | "contentVersion">,
-  ): boolean {
-    const records = this.records.records;
-    const kind = records.kind[record];
-    if (
-      records.rasterScale[record] !== result.rasterScale ||
-      (kind === CONTENT_KIND &&
-        records.epoch[record] !== this.frameState.epoch) ||
-      (kind === CONTENT_KIND &&
-        this.records.requestedContentVersion[record] !== result.contentVersion)
-    )
-      return false;
-    if (kind === HEADER_KIND) return this.isHeaderRequested(record);
-    if (kind === LABEL_KIND)
-      return (
-        this.planner.requestLabel &&
-        records.rasterScale[record] === this.planner.requestedLabelScale
-      );
-    return this.planner.isRequested(
-      result.rasterScale,
-      records.column[record] ?? 0,
-      records.row[record] ?? 0,
-      records.epoch[record] ?? 0,
+  restoreResidency(): void {
+    const capacity = this.records.records.active.length;
+    this.records = new TileRecords(capacity, this.frameState);
+    this.planner = new TileSetPlanner(
+      this.records.records,
+      capacity,
+      this.frameState,
     );
+    if (this.contentSource) this.records.setContentSource(this.contentSource);
+    this.textReady = false;
+    this.exactVisibleReady = false;
   }
 
   prepare(input: WidgetPrepareInput): void {
@@ -425,20 +228,6 @@ export class WidgetTiles implements TileJobOwner {
     this.exactVisibleReady = source.hasText && this.planner.exactVisibleReady();
   }
 
-  release(): void {
-    for (
-      let index = 0;
-      index < this.records.records.active.length;
-      index += 1
-    ) {
-      if (this.records.records.active[index]) this.records.releaseRecord(index);
-    }
-    this.contentSource = undefined;
-    this.labelZoom = Number.NaN;
-    this.labelFrameWidth = Number.NaN;
-    this.labelFrameHeight = Number.NaN;
-  }
-
   private setPrefetch(input: WidgetPrepareInput): void {
     const {
       camera,
@@ -459,9 +248,7 @@ export class WidgetTiles implements TileJobOwner {
       textPrefetchActive &&
       textPrefetchZoom > 0;
     const zoomOutPrefetch = zoomGestureActive && zoomOut && !minimapActive;
-    this.planner.setPrefetchRasterScale(
-      textPrefetch ? textPrefetchZoom * viewport.devicePixelRatio : 0,
-    );
+    this.planner.setPrefetchZoom(textPrefetch ? textPrefetchZoom : 0);
     if (!textPrefetch && !zoomOutPrefetch) {
       this.planner.setPrefetchActive(false);
       return;
@@ -501,17 +288,6 @@ export class WidgetTiles implements TileJobOwner {
       this.prefetchWindow.right,
       this.prefetchWindow.bottom,
     );
-  }
-
-  private isHeaderRequested(record: number): boolean {
-    const records = this.records.records;
-    if (records.rasterScale[record] !== this.planner.requestedHeaderScale)
-      return false;
-    const column = records.column[record] ?? 0;
-    for (let index = 0; index < this.planner.requestHeaderCount; index += 1) {
-      if (this.planner.requestHeaderColumns[index] === column) return true;
-    }
-    return false;
   }
 }
 

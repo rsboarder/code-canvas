@@ -52,6 +52,24 @@ export interface TileRecordSource {
   readonly label?: TileLabelSource;
 }
 
+export interface TileRecordView {
+  key: string | undefined;
+  active: boolean;
+  ready: boolean;
+  pending: boolean;
+  kind: number;
+  rasterScale: number;
+  epoch: number;
+  contentVersion: number;
+  column: number;
+  row: number;
+  localX: number;
+  localY: number;
+  width: number;
+  height: number;
+  highlighted: boolean;
+}
+
 export interface TileLabelSource {
   readonly identity: string;
   readonly x: number;
@@ -60,16 +78,9 @@ export interface TileLabelSource {
   readonly height: number;
 }
 
-export interface TileRecordPool {
-  release(key: string): void;
-  isPinned(key: string): boolean;
-}
-
-interface TileRecordCallbacks {
-  readonly onKeyReleased?: ((key: string) => void) | undefined;
-}
-
 export class TileRecords {
+  readonly frameState: WidgetTileFrameState;
+
   readonly records: TileSetRecordArrays;
 
   readonly keys: (string | undefined)[];
@@ -91,11 +102,10 @@ export class TileRecords {
   private contentWidth = 0;
 
   constructor(
-    private readonly pool: TileRecordPool,
     capacity: number,
-    readonly frameState: WidgetTileFrameState = createWidgetTileFrameState(),
-    private readonly callbacks: TileRecordCallbacks = {},
+    frameState: WidgetTileFrameState = createWidgetTileFrameState(),
   ) {
+    this.frameState = frameState;
     this.records = createTileSetRecordArrays(capacity);
     this.keys = new Array<string | undefined>(capacity);
     this.headerPaths = new Array<string | undefined>(capacity);
@@ -106,14 +116,9 @@ export class TileRecords {
   }
 
   setContentSource(source: TileRecordSource, epoch?: number): void {
-    const pathChanged = this.source?.filePath !== source.filePath;
     this.source = source;
     this.contentWidth = source.contentWidth;
     if (epoch !== undefined) this.frameState.epoch = epoch;
-    if (pathChanged) {
-      this.releaseStaleHeaders(source.filePath);
-      this.releaseStaleLabels(source.label?.identity);
-    }
     this.updateLabelGeometry(source);
   }
 
@@ -206,80 +211,32 @@ export class TileRecords {
     return -1;
   }
 
-  recordKind(record: number): number {
-    return this.records.kind[record] ?? CONTENT_KIND;
-  }
-
-  recordRasterScale(record: number): number {
-    return this.records.rasterScale[record] ?? 1;
-  }
-
-  recordColumn(record: number): number {
-    return this.records.column[record] ?? 0;
-  }
-
-  recordRow(record: number): number {
-    return this.records.row[record] ?? 0;
-  }
-
-  recordWidth(record: number): number {
-    return this.records.width[record] ?? 0;
-  }
-
-  recordHeight(record: number): number {
-    return this.records.height[record] ?? 0;
-  }
-
-  recordEpoch(record: number): number {
-    return this.records.epoch[record] ?? 0;
+  read(record: number, out: TileRecordView): void {
+    out.key = this.keys[record];
+    out.active = this.records.active[record] === 1;
+    out.ready = this.records.ready[record] === 1;
+    out.pending = this.pending[record] === 1;
+    out.kind = this.records.kind[record] ?? CONTENT_KIND;
+    out.rasterScale = this.records.rasterScale[record] ?? 1;
+    out.epoch = this.records.epoch[record] ?? 0;
+    out.contentVersion = this.records.contentVersion[record] ?? -1;
+    out.column = this.records.column[record] ?? 0;
+    out.row = this.records.row[record] ?? 0;
+    out.localX = this.records.localX[record] ?? 0;
+    out.localY = this.records.localY[record] ?? 0;
+    out.width = this.records.width[record] ?? 0;
+    out.height = this.records.height[record] ?? 0;
+    out.highlighted = this.highlighted[record] === 1;
   }
 
   findFreeRecord(): number {
     for (let index = 0; index < this.records.active.length; index += 1) {
       if (!this.records.active[index]) return index;
     }
-    for (let index = 0; index < this.records.active.length; index += 1) {
-      const key = this.keys[index];
-      if (key && !this.pending[index] && !this.pool.isPinned(key)) {
-        this.pool.release(key);
-        this.deactivate(index);
-        return index;
-      }
-    }
     return -1;
   }
 
-  releaseRecord(record: number): void {
-    const key = this.keys[record];
-    if (key) this.pool.release(key);
-    this.deactivate(record);
-  }
-
-  releaseStaleHeaders(filePath: string): void {
-    for (let index = 0; index < this.records.active.length; index += 1) {
-      if (
-        this.records.active[index] &&
-        this.records.kind[index] === HEADER_KIND &&
-        this.headerPaths[index] !== filePath
-      )
-        this.releaseRecord(index);
-    }
-  }
-
-  releaseStaleLabels(identity: string | undefined): void {
-    for (let index = 0; index < this.records.active.length; index += 1) {
-      if (
-        this.records.active[index] &&
-        this.records.kind[index] === LABEL_KIND &&
-        this.labelIdentities[index] !== identity
-      )
-        this.releaseRecord(index);
-    }
-  }
-
-  deactivate(record: number): void {
-    const key = this.keys[record];
-    if (key) this.callbacks.onKeyReleased?.(key);
+  clear(record: number): void {
     this.records.active[record] = 0;
     this.records.ready[record] = 0;
     this.pending[record] = 0;
@@ -291,9 +248,13 @@ export class TileRecords {
     this.keys[record] = undefined;
   }
 
-  deactivateByKey(key: string): void {
-    const record = this.findRecordByKey(key);
-    if (record >= 0) this.deactivate(record);
+  setState(record: number, state: "pending" | "ready", value: boolean): void {
+    if (state === "pending") this.pending[record] = value ? 1 : 0;
+    if (state === "ready") this.records.ready[record] = value ? 1 : 0;
+  }
+
+  setRequestedContentVersion(record: number, version: number): void {
+    this.requestedContentVersion[record] = version;
   }
 
   private setRecordGeometry(slot: number): void {

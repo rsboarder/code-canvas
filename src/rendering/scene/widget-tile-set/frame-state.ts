@@ -1,5 +1,7 @@
 export interface WidgetTileFrameState {
   epoch: number;
+  zoom: number;
+  devicePixelRatio: number;
   zoomGestureActive: boolean;
   atRestScale: number;
   contentWidth: number;
@@ -22,6 +24,8 @@ export interface WidgetTileFrameState {
 export function createWidgetTileFrameState(): WidgetTileFrameState {
   return {
     epoch: 0,
+    zoom: 1,
+    devicePixelRatio: 1,
     zoomGestureActive: false,
     atRestScale: 1,
     contentWidth: 0,

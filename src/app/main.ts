@@ -1,13 +1,13 @@
 import {
   BoardService,
   createWidgetRow,
-  createHitTestResult,
   type BoardMetrics,
+  type WidgetRow,
 } from "../board/index";
 import { DocumentResidency } from "../code-view/index";
 import { EditingTransition } from "../editing/index";
 import { createMonacoEditorHost } from "../editing/infrastructure/monaco-editor-host";
-import { GestureTargeting } from "../interaction/gesture-targeting";
+import { createInputStage, GestureTargeting } from "../interaction";
 import { FrameStats } from "../performance/frame-stats";
 import { MetricsOverlay } from "../performance/metrics-overlay";
 import { FrameLog } from "./frame-log";
@@ -16,9 +16,9 @@ import {
   FrameLoop,
   WebGlRenderer,
   type CodeTextMetrics,
+  type FrameTileMetrics,
 } from "../rendering/index";
 import { DEFAULT_CODE_FONT } from "../shared/font";
-import type { FrameStage } from "../shared/frame";
 import type { Rect } from "../shared/geometry/geometry";
 import { configureMonacoTextMate } from "../code-view/infrastructure/monaco-tokens";
 import { themePalette } from "../code-view/infrastructure/theme";
@@ -45,6 +45,7 @@ import { createToolbar } from "./toolbar";
 import { createFolderActions } from "./folder-actions";
 import { syncDetailLevel } from "./detail-level-sync";
 import type { DevProbe } from "./dev-probe";
+import { createFrameStages, type FrameStageSteps } from "./frame-stages";
 
 const root = document.body;
 root.style.background = "#0e121b";
@@ -94,6 +95,12 @@ const residency = new DocumentResidency({
 const frameStats = new FrameStats();
 const metricsOverlay = new MetricsOverlay(root, frameStats);
 const frameLog = new FrameLog();
+const frameTileMetrics: FrameTileMetrics = {
+  capacity: 0,
+  inUse: 0,
+  inFlight: 0,
+  posted: 0,
+};
 let renderer: WebGlRenderer | undefined;
 let frameLoop: FrameLoop | undefined;
 let editing: EditingTransition | undefined;
@@ -108,20 +115,12 @@ const editingState = {
 };
 const targeting = new GestureTargeting(board, editingState);
 const widgetRow = createWidgetRow();
-const hit = createHitTestResult();
 let editorVisible = false;
 const inputWiring = createInputWiring({
   canvas,
   editorContainer,
-  board,
   targeting,
-  getEditing: () => editing,
-  getRenderer: () => renderer,
   getFrameLoop: () => frameLoop,
-  updateWidgetBodyRect,
-  toggleMetricsOverlay: () => {
-    metricsOverlay.toggle();
-  },
 });
 
 function setCanvasAttribute(name: string, value: string): void {
@@ -131,16 +130,20 @@ function setCanvasAttribute(name: string, value: string): void {
 function bodyRect(): Rect | undefined {
   const row = readCurrentWidgetRow();
   if (!row) return undefined;
+  return rowScreenRect(row, codeFont.bodyTop);
+}
+
+function rowScreenRect(row: WidgetRow, bodyTop = 0): Rect {
   return {
     x: board.camera.offsetX + row.x * board.camera.scale,
-    y: board.camera.offsetY + (row.y + codeFont.bodyTop) * board.camera.scale,
+    y: board.camera.offsetY + (row.y + bodyTop) * board.camera.scale,
     width: row.width * board.camera.scale,
-    height: (row.height - codeFont.bodyTop) * board.camera.scale,
+    height: (row.height - bodyTop) * board.camera.scale,
   };
 }
 
 function firstFileId(): SourceFileId | undefined {
-  return workspaceWiring?.firstDocumentFile()?.fileId;
+  return workspaceWiring?.firstFileId();
 }
 
 function readCurrentWidgetRow() {
@@ -157,9 +160,30 @@ function updateWidgetBodyRect(): void {
   const rect = bodyRect();
   if (!rect) return;
   setCanvasAttribute("data-widget-body-rect", JSON.stringify(rect));
-  editorHost?.setBounds(editorBounds(), board.camera.scale);
   canvas.setAttribute("data-text-metrics-scale", String(board.camera.scale));
 }
+
+const inputStage = createInputStage({
+  board,
+  targeting,
+  getEditing: () => editing,
+  frame: {
+    setGestureInProgress: (value) => frameLoop?.setGestureInProgress(value),
+    invalidate: () => frameLoop?.invalidate(),
+  },
+  phase: {
+    setGesturePhase: (phase) => renderer?.setGesturePhase(phase),
+  },
+  detail: {
+    update: () => syncDetailLevel(board, renderer, canvas),
+  },
+  viewportWidth: () => canvas.clientWidth || window.innerWidth,
+  viewportHeight: () => canvas.clientHeight || window.innerHeight,
+  updateWidgetBodyRect,
+  toggleMetricsOverlay: () => {
+    metricsOverlay.toggle();
+  },
+});
 
 function applyHarnessCamera(x: number, y: number, scale: number): void {
   board.setCamera(x, y, scale);
@@ -176,17 +200,6 @@ function readHarnessCamera(): { x: number; y: number; scale: number } {
   };
 }
 
-function editorBounds(): Rect {
-  const row = readCurrentWidgetRow();
-  if (!row) return { x: 0, y: 0, width: 1, height: 1 };
-  return {
-    x: board.camera.offsetX + row.x * board.camera.scale,
-    y: board.camera.offsetY + (row.y + codeFont.bodyTop) * board.camera.scale,
-    width: row.width,
-    height: row.height - codeFont.bodyTop,
-  };
-}
-
 function exposeEditorPosition(): void {
   const position = editorHost?.getPosition();
   if (!position) return;
@@ -194,7 +207,9 @@ function exposeEditorPosition(): void {
 }
 
 function applyInput(): boolean {
-  inputWiring.applyInput();
+  if (!frameLoop || !renderer) return false;
+  const devicePixelRatio = window.devicePixelRatio || 1;
+  inputStage.apply(performance.now(), devicePixelRatio);
   return false;
 }
 
@@ -207,13 +222,14 @@ function restoreWorkspaceLayout(): boolean {
   for (let index = 0; index < board.widgetCount; index += 1) {
     const id = board.widgetIdAtFromTop(index);
     if (!id) continue;
-    const file = workspaceWiring.documentFile(id);
-    if (file) paths.set(id, file.path);
+    const path = workspaceWiring.pathOfFile(id);
+    if (path) paths.set(id, path);
   }
   renderer?.setFilePaths(paths);
-  const documentFile = workspaceWiring.firstDocumentFile();
-  if (!documentFile) return false;
-  toolbar.setStatus(documentFile.path);
+  const firstId = workspaceWiring.firstFileId();
+  const firstPath = firstId ? workspaceWiring.pathOfFile(firstId) : undefined;
+  if (!firstPath) return false;
+  toolbar.setStatus(firstPath);
   setCanvasAttribute("data-editor-line-count", "");
   updateWidgetBodyRect();
   return true;
@@ -231,17 +247,12 @@ function widgetRects(): readonly {
   for (let index = 0; index < board.widgetCount; index += 1) {
     const id = board.widgetIdAtFromTop(index);
     if (!id) continue;
-    const file = workspaceWiring.documentFile(id);
-    if (!file) continue;
+    const filePath = workspaceWiring.pathOfFile(id);
+    if (!filePath) continue;
     const row = board.readWidget(id, widgetRow);
     rects.push({
-      filePath: file.path,
-      rect: {
-        x: board.camera.offsetX + row.x * board.camera.scale,
-        y: board.camera.offsetY + row.y * board.camera.scale,
-        width: row.width * board.camera.scale,
-        height: row.height * board.camera.scale,
-      },
+      filePath,
+      rect: rowScreenRect(row),
     });
   }
   return rects;
@@ -255,41 +266,23 @@ function reportRasterError(): boolean {
 
 function applyEditingSwap(): boolean {
   if (!editing || !renderer) return false;
-  const swap = editing.takeFrameSwap();
-  if (!swap) return editing.isExitHeld;
-  renderer.setHiddenBody(
-    swap.direction === "enter" ? swap.widgetId : undefined,
-  );
+  const swap = editing.applyFrameSwap();
+  if (swap.direction === undefined) return swap.needsAnotherTick;
   editorVisible = swap.direction === "enter";
-  setCanvasAttribute("data-editing", String(swap.direction === "enter"));
-  if (swap.direction === "enter") {
+  setCanvasAttribute("data-editing", String(editorVisible));
+  if (editorVisible) {
     updateWidgetBodyRect();
     exposeEditorPosition();
-    editorHost?.focus();
   }
   if (swap.direction === "exit") applyInput();
-  return false;
-}
-
-function beginEditing(event: MouseEvent): void {
-  if (!editing || !editorHost || board.detailLevel !== "text") return;
-  board.hitTest(event.offsetX, event.offsetY, hit);
-  const widgetId = hit.widgetId;
-  if (hit.zone !== "body" || widgetId === undefined) return;
-  if (editing.begin(widgetId, { x: hit.contentX, y: hit.contentY })) {
-    frameLoop?.invalidate();
-  }
+  return swap.needsAnotherTick;
 }
 
 function findWidgetIdByPath(
   path: string,
   wiring: WorkspaceWiring,
 ): SourceFileId | undefined {
-  for (let index = 0; index < board.widgetCount; index += 1) {
-    const id = board.widgetIdAtFromTop(index);
-    if (id && wiring.documentFile(id)?.path === path) return id;
-  }
-  return undefined;
+  return wiring.fileIdForPath(path);
 }
 
 function waitForAnimationFrame(
@@ -354,6 +347,8 @@ function wireEditing(
   host: NonNullable<typeof editorHost>,
   workspace: WorkspaceService,
 ): void {
+  const currentRenderer = renderer;
+  if (!currentRenderer) return;
   editing = new EditingTransition({
     board,
     workspace,
@@ -361,8 +356,8 @@ function wireEditing(
     residency,
     lineMetrics: textMetrics,
     gutter: textMetrics.lineNumberGutter,
-    tilesCurrent: (widgetId, contentVersion) =>
-      renderer?.exitViewCovered(widgetId, contentVersion) ?? false,
+    gpuView: currentRenderer,
+    bodyTop: codeFont.bodyTop,
     onOpened: () => {
       setCanvasAttribute("data-editor-line-count", String(host.getLineCount()));
       updateWidgetBodyRect();
@@ -387,66 +382,9 @@ function wireEditing(
   host.onChange(scheduleAutosave);
   host.onEscape(() => {
     if (!editing?.isEditing) return;
-    editing.end("escape");
+    editing.end();
     frameLoop?.invalidate();
   });
-}
-
-function createFrameStages(): FrameStage[] {
-  const stages: FrameStage[] = [
-    { name: "apply-input", run: applyInput },
-    { name: "restore-workspace-layout", run: restoreWorkspaceLayout },
-    {
-      name: "widget-table",
-      run: () => {
-        renderer?.syncWidgetTable(board);
-        return false;
-      },
-    },
-    {
-      name: "cull",
-      run: () => {
-        if (!renderer) return false;
-        residency.visibleRangesChanged(renderer.cull(board.camera));
-        return false;
-      },
-    },
-    { name: "report-raster-error", run: reportRasterError },
-    { name: "editing-swap", run: applyEditingSwap },
-    {
-      name: "residency-drain",
-      run: () => {
-        if (!renderer) return false;
-        const drained = residency.drain(2, renderer);
-        // Posting raster jobs and uploading returned tiles runs in this same
-        // budgeted slot (design D7 "GpuUploader"), not from the raster
-        // worker's message handler.
-        renderer.setPriorityFile(editing?.pendingExitFileId);
-        const uploadedTiles = renderer.drainTiles(board.camera, 2);
-        devProbe?.sync();
-        return drained || uploadedTiles > 0;
-      },
-    },
-    {
-      name: "draw",
-      run: () => {
-        const metrics = renderer?.draw(board.camera);
-        if (metrics) {
-          frameLoop?.setFrameMetrics(metrics);
-          frameLoop?.setSampleState(
-            board.detailLevel,
-            metrics.visibleWidgetCount,
-            residency.backlogDepth,
-            board.textWanted(window.devicePixelRatio || 1),
-          );
-        }
-        return false;
-      },
-    },
-  ];
-  if (import.meta.env.DEV)
-    stages.push({ name: "frame-log", run: recordFrameLog });
-  return stages;
 }
 
 function recordFrameLog(): boolean {
@@ -463,6 +401,50 @@ function recordFrameLog(): boolean {
     editorVisible,
   });
   return false;
+}
+
+function createFrameStageSteps(): FrameStageSteps {
+  return {
+    applyInput,
+    restoreWorkspaceLayout,
+    syncWidgetTable: () => {
+      renderer?.syncWidgetTable(board);
+      return false;
+    },
+    cull: () => {
+      if (!renderer) return false;
+      residency.visibleRangesChanged(renderer.cull(board.camera));
+      return false;
+    },
+    reportRasterError,
+    applyEditingSwap,
+    drain: () => {
+      if (!renderer) return false;
+      const drained = residency.drain(2, renderer);
+      // Posting raster jobs and uploading returned tiles runs in this same
+      // budgeted slot (design D7 "GpuUploader"), not from the raster
+      // worker's message handler.
+      const uploadedTiles = renderer.drainTiles(board.camera, 2);
+      devProbe?.sync();
+      return drained || uploadedTiles > 0;
+    },
+    draw: () => {
+      const metrics = renderer?.draw(board.camera);
+      if (metrics) {
+        renderer?.frameTileMetrics(frameTileMetrics);
+        frameLoop?.setFrameMetrics(metrics, frameTileMetrics);
+        frameLoop?.setSampleState(
+          board.detailLevel,
+          metrics.visibleWidgetCount,
+          residency.backlogDepth,
+          board.textWanted(window.devicePixelRatio || 1),
+        );
+        frameLoop?.setBoardState(board.widgetCount, board.camera.scale);
+      }
+      return renderer?.isFading() ?? false;
+    },
+    ...(import.meta.env.DEV ? { frameLog: recordFrameLog } : {}),
+  };
 }
 
 async function start(): Promise<void> {
@@ -506,7 +488,7 @@ async function start(): Promise<void> {
     root,
     events,
     workspace: workspaceWiring.workspace,
-    pathOf: (fileId) => workspaceWiring?.documentFile(fileId)?.path,
+    pathOf: (fileId) => workspaceWiring?.pathOfFile(fileId),
     editing: {
       activeWidgetId: () => editing?.activeWidgetId,
       discard: () => {
@@ -516,9 +498,12 @@ async function start(): Promise<void> {
     } satisfies SaveConflictEditing,
   });
   if (editorHost) wireEditing(editorHost, workspaceWiring.workspace);
-  frameLoop = new FrameLoop(createFrameStages(), (sample) => {
-    frameStats.record(sample);
-  });
+  frameLoop = new FrameLoop(
+    createFrameStages(createFrameStageSteps()),
+    (sample) => {
+      frameStats.record(sample);
+    },
+  );
   renderer.onNeedsRedraw(() => frameLoop?.invalidate());
   toolbar.enable({
     openFolder: () => void folderActions.openFolder(),
@@ -538,7 +523,6 @@ async function start(): Promise<void> {
     frameLoop?.invalidate();
   });
   inputWiring.wire();
-  canvas.addEventListener("dblclick", beginEditing);
   window.addEventListener("resize", () => frameLoop?.invalidate());
   frameLoop.invalidate();
 }

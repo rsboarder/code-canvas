@@ -9,24 +9,13 @@ import { LayoutPersistence } from "../board/infrastructure/layout-persistence";
 import { LayoutStore } from "../board/infrastructure/layout-store";
 import type { EventBus } from "../shared/events";
 import type { SourceFileId } from "../shared/domain";
-import {
-  WorkspaceService,
-  type DiscoveredFile,
-  type FileContentChanged,
-  type WorkspaceEvent,
-} from "../workspace";
-
-export interface DocumentFile {
-  readonly fileId: SourceFileId;
-  readonly path: string;
-  readonly text: string;
-  readonly contentVersion: number;
-}
+import { WorkspaceService, type WorkspaceEvent } from "../workspace";
 
 export interface WorkspaceWiring {
   readonly workspace: WorkspaceService;
-  readonly documentFile: (fileId: SourceFileId) => DocumentFile | undefined;
-  readonly firstDocumentFile: () => DocumentFile | undefined;
+  readonly pathOfFile: (fileId: SourceFileId) => string | undefined;
+  readonly fileIdForPath: (path: string) => SourceFileId | undefined;
+  readonly firstFileId: () => SourceFileId | undefined;
 }
 
 interface WorkspaceWiringOptions {
@@ -53,15 +42,28 @@ export async function createWorkspaceWiring(
     viewport: options.viewport,
     onRestored: options.onLayoutRestored,
   });
-  const discoveredFiles = new Map<SourceFileId, DiscoveredFile>();
-  const content = new Map<SourceFileId, FileContentChanged>();
+  const pathsByFileId = new Map<SourceFileId, string>();
+  const fileIdsByPath = new Map<string, SourceFileId>();
+  let firstFileIdByPath: SourceFileId | undefined;
   options.events.subscribe("FilesDiscovered", (event) => {
-    discoveredFiles.clear();
-    for (const file of event.files) discoveredFiles.set(file.fileId, file);
+    pathsByFileId.clear();
+    fileIdsByPath.clear();
+    firstFileIdByPath = undefined;
+    let firstPath: string | undefined;
+    for (const file of event.files) {
+      pathsByFileId.set(file.fileId, file.path);
+      fileIdsByPath.set(file.path, file.fileId);
+      if (
+        firstPath === undefined ||
+        file.path.localeCompare(firstPath, "en") < 0
+      ) {
+        firstPath = file.path;
+        firstFileIdByPath = file.fileId;
+      }
+    }
     layoutPersistence.folderDiscovered(event.folderId, event.files);
   });
   options.events.subscribe("FileContentChanged", (event) => {
-    content.set(event.fileId, event);
     options.residency.contentChanged(
       event.fileId,
       event.contentVersion,
@@ -70,36 +72,8 @@ export async function createWorkspaceWiring(
   });
   return {
     workspace,
-    documentFile: (fileId) => documentFile(fileId, discoveredFiles, content),
-    firstDocumentFile: () => firstDocumentFile(discoveredFiles, content),
+    pathOfFile: (fileId) => pathsByFileId.get(fileId),
+    fileIdForPath: (path) => fileIdsByPath.get(path),
+    firstFileId: () => firstFileIdByPath,
   };
-}
-
-function documentFile(
-  fileId: SourceFileId,
-  discoveredFiles: ReadonlyMap<SourceFileId, DiscoveredFile>,
-  content: ReadonlyMap<SourceFileId, FileContentChanged>,
-): DocumentFile | undefined {
-  const discovered = discoveredFiles.get(fileId);
-  const changed = content.get(fileId);
-  if (!discovered || !changed) return undefined;
-  return {
-    fileId,
-    path: discovered.path,
-    text: changed.text,
-    contentVersion: changed.contentVersion,
-  };
-}
-
-function firstDocumentFile(
-  discoveredFiles: ReadonlyMap<SourceFileId, DiscoveredFile>,
-  content: ReadonlyMap<SourceFileId, FileContentChanged>,
-): DocumentFile | undefined {
-  let first: DiscoveredFile | undefined;
-  for (const file of discoveredFiles.values()) {
-    if (!first || file.path.localeCompare(first.path, "en") < 0) first = file;
-  }
-  return first
-    ? documentFile(first.fileId, discoveredFiles, content)
-    : undefined;
 }

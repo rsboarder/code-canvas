@@ -187,6 +187,10 @@ export class TilePool {
     return this.fullAllocator.pinnedCount();
   }
 
+  get fullSlotsInUse(): number {
+    return this.fullAllocator.residentCount;
+  }
+
   get slotUvScaleX(): number {
     return TILE_DEVICE_SIZE / this.atlasWidthValue;
   }

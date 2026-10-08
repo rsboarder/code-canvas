@@ -482,6 +482,37 @@ export function renderMarkdownReport(report: HarnessReport): string {
   return `${lines.join("\n")}\n`;
 }
 
+export function renderSummaryTable(report: HarnessReport): string {
+  const lines = [
+    `VERDICT: ${report.verdict}`,
+    "",
+    "Scenario | App task ms | p99 ms | Regressions | Gesture ratio | Camera",
+    "--- | ---: | ---: | ---: | ---: | ---",
+  ];
+  for (const scenario of report.scenarios) {
+    const metrics = scenario.worstRun.metrics;
+    lines.push(
+      `${scenario.scenario} | ${value(metrics.applicationTaskMs)} | ${value(metrics.p99)} | ${String(scenario.regressions.length)} | ${gestureRatioText(metrics.gesture)} | ${cameraCheckText(metrics.camera, metrics.cameraRange)}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function gestureRatioText(gesture: GestureTiming | undefined): string {
+  return gesture ? gesture.ratio.toFixed(2) : "n/a";
+}
+
+function cameraCheckText(
+  camera: CameraCheck | undefined,
+  cameraRange: CameraRangeCheck | undefined,
+): string {
+  if (!camera?.checked) return "skipped";
+  const final = camera.withinTolerance ? "ok" : "mismatch";
+  if (!cameraRange?.recorded) return final;
+  const { minScale, maxScale } = cameraRange.recorded;
+  return `${final} [${minScale.toFixed(2)}-${maxScale.toFixed(2)}]`;
+}
+
 function appendRunTable(
   lines: string[],
   scenarios: readonly ScenarioEvaluation[],

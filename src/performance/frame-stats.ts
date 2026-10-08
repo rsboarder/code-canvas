@@ -9,6 +9,8 @@ import {
 type DetailLevelName = NonNullable<FrameSample["detailLevel"]>;
 
 const DEFAULT_CAPACITY = 240;
+const OVERLAY_WINDOW_MS = 2000;
+const JOB_RATE_WINDOW_MS = 1000;
 
 export interface FrameStageStats {
   readonly p50: Statistic;
@@ -33,9 +35,25 @@ export interface FrameStatsSnapshot extends FrameStageStats {
 
 interface FrameOverlayMetrics {
   readonly framesPerSecond: number;
+  readonly p50IntervalMs: Statistic;
   readonly p99IntervalMs: Statistic;
+  readonly droppedFrames: Statistic;
+  readonly worstTickMs: Statistic;
   readonly visibleWidgetCount: Statistic;
+  readonly totalWidgetCount: Statistic;
   readonly detailLevel: DetailLevelName | typeof UNAVAILABLE;
+  readonly textWeight: Statistic;
+  readonly stages: Readonly<Record<string, FrameStageStats>>;
+  readonly tilePoolSlotsInUse: Statistic;
+  readonly tilePoolCapacity: Statistic;
+  readonly tileMemoryBytes: Statistic;
+  readonly rasterJobsInFlight: Statistic;
+  readonly rasterJobsPostedPerSecond: Statistic;
+  readonly drawnTileCount: Statistic;
+  readonly drawnFallbackTileCount: Statistic;
+  readonly timeToSharpMs: Statistic;
+  readonly residencyBacklog: Statistic;
+  readonly cameraZoom: Statistic;
 }
 
 interface StageSamples {
@@ -47,6 +65,16 @@ export class FrameStats {
   private readonly intervals: Float64Array;
   private readonly intervalPresent: Uint8Array;
   private readonly sampleStartTimes: Float64Array;
+  private readonly tickDurations: Float64Array;
+  private readonly textWeights: Float64Array;
+  private readonly totalWidgetCounts: Float64Array;
+  private readonly cameraZooms: Float64Array;
+  private readonly tilePoolSlotsInUse: Float64Array;
+  private readonly tilePoolCapacities: Float64Array;
+  private readonly rasterJobsInFlight: Float64Array;
+  private readonly rasterJobsPostedTotals: Float64Array;
+  private readonly drawnTileCounts: Float64Array;
+  private readonly drawnFallbackTileCounts: Float64Array;
   private readonly stageSamples = new Map<string, StageSamples>();
   private readonly stageNames: string[] = [];
   private writeIndex = 0;
@@ -60,8 +88,17 @@ export class FrameStats {
   private previousDetailLevel: FrameSample["detailLevel"];
   private largestTextSwitchLagMs: number | undefined;
   private largestResidencyBacklog: number | undefined;
+  private latestResidencyBacklog: number | undefined;
   private latestDetailLevel: DetailLevelName | undefined;
   private latestVisibleWidgetCount: number | undefined;
+  private latestTextWeight: number | undefined;
+  private latestTotalWidgetCount: number | undefined;
+  private latestCameraZoom: number | undefined;
+  private latestTilePoolSlotsInUse: number | undefined;
+  private latestTilePoolCapacity: number | undefined;
+  private latestRasterJobsInFlight: number | undefined;
+  private latestDrawnTileCount: number | undefined;
+  private latestDrawnFallbackTileCount: number | undefined;
 
   constructor(private readonly capacity = DEFAULT_CAPACITY) {
     if (!Number.isInteger(capacity) || capacity < 1) {
@@ -70,6 +107,16 @@ export class FrameStats {
     this.intervals = new Float64Array(capacity);
     this.intervalPresent = new Uint8Array(capacity);
     this.sampleStartTimes = new Float64Array(capacity);
+    this.tickDurations = new Float64Array(capacity);
+    this.textWeights = new Float64Array(capacity);
+    this.totalWidgetCounts = new Float64Array(capacity);
+    this.cameraZooms = new Float64Array(capacity);
+    this.tilePoolSlotsInUse = new Float64Array(capacity);
+    this.tilePoolCapacities = new Float64Array(capacity);
+    this.rasterJobsInFlight = new Float64Array(capacity);
+    this.rasterJobsPostedTotals = new Float64Array(capacity);
+    this.drawnTileCounts = new Float64Array(capacity);
+    this.drawnFallbackTileCounts = new Float64Array(capacity);
   }
 
   record(sample: FrameSample): void {
@@ -81,6 +128,8 @@ export class FrameStats {
       this.intervalPresent[this.writeIndex] = 1;
     }
     this.previousFrameStart = sample.frameStartTime;
+    this.resetMetricSlots();
+    this.tickDurations[this.writeIndex] = stageDuration(sample.stageTimings);
     this.clearStageSlots();
     for (const timing of sample.stageTimings) {
       const stage = this.getOrCreateStage(timing.name);
@@ -110,6 +159,12 @@ export class FrameStats {
     ) {
       this.largestResidencyBacklog = sample.residencyBacklogDepth;
     }
+    if (
+      sample.residencyBacklogDepth !== undefined &&
+      Number.isFinite(sample.residencyBacklogDepth)
+    ) {
+      this.latestResidencyBacklog = sample.residencyBacklogDepth;
+    }
     this.writeIndex = (this.writeIndex + 1) % this.capacity;
     this.sampleCount = Math.min(this.sampleCount + 1, this.capacity);
     this.totalSampleCount += 1;
@@ -131,8 +186,17 @@ export class FrameStats {
     this.previousDetailLevel = undefined;
     this.largestTextSwitchLagMs = undefined;
     this.largestResidencyBacklog = undefined;
+    this.latestResidencyBacklog = undefined;
     this.latestDetailLevel = undefined;
     this.latestVisibleWidgetCount = undefined;
+    this.latestTextWeight = undefined;
+    this.latestTotalWidgetCount = undefined;
+    this.latestCameraZoom = undefined;
+    this.latestTilePoolSlotsInUse = undefined;
+    this.latestTilePoolCapacity = undefined;
+    this.latestRasterJobsInFlight = undefined;
+    this.latestDrawnTileCount = undefined;
+    this.latestDrawnFallbackTileCount = undefined;
   }
 
   snapshot(): FrameStatsSnapshot {
@@ -156,27 +220,86 @@ export class FrameStats {
   }
 
   overlayMetrics(now: number): FrameOverlayMetrics {
-    let framesPerSecond = 0;
-    const earliest = now - 1000;
-    for (let offset = 0; offset < this.sampleCount; offset += 1) {
-      const index =
-        (this.writeIndex - this.sampleCount + offset + this.capacity) %
-        this.capacity;
-      const startTime = this.sampleStartTimes[index];
-      if (
-        startTime !== undefined &&
-        startTime >= earliest &&
-        startTime <= now
-      ) {
-        framesPerSecond += 1;
-      }
-    }
+    const intervals = this.collectRecentIntervals(now);
+    const frameStats = summarize(intervals);
+    const stages = this.recentStageStats(now);
     return {
-      framesPerSecond,
-      p99IntervalMs: this.snapshot().p99,
-      visibleWidgetCount: this.latestVisibleWidgetCount ?? UNAVAILABLE,
-      detailLevel: this.latestDetailLevel ?? UNAVAILABLE,
+      framesPerSecond: this.countRecentFrames(now),
+      p50IntervalMs: frameStats.p50,
+      p99IntervalMs: frameStats.p99,
+      droppedFrames: countLongIntervals(intervals),
+      worstTickMs: this.maxRecentMetric(this.tickDurations, now),
+      ...this.latestViewMetrics(),
+      stages,
+      ...this.latestTileMetrics(),
+      rasterJobsInFlight: this.latestRasterJobsInFlight ?? UNAVAILABLE,
+      rasterJobsPostedPerSecond: this.jobsPostedPerSecond(now),
+      ...this.latestDrawMetrics(),
     };
+  }
+
+  private latestViewMetrics(): Pick<
+    FrameOverlayMetrics,
+    "visibleWidgetCount" | "totalWidgetCount" | "detailLevel" | "textWeight"
+  > {
+    return {
+      visibleWidgetCount: this.latestVisibleWidgetCount ?? UNAVAILABLE,
+      totalWidgetCount: this.latestTotalWidgetCount ?? UNAVAILABLE,
+      detailLevel: this.latestDetailLevel ?? UNAVAILABLE,
+      textWeight: this.latestTextWeight ?? UNAVAILABLE,
+    };
+  }
+
+  private latestTileMetrics(): Pick<
+    FrameOverlayMetrics,
+    "tilePoolSlotsInUse" | "tilePoolCapacity" | "tileMemoryBytes"
+  > {
+    return {
+      tilePoolSlotsInUse: this.latestTilePoolSlotsInUse ?? UNAVAILABLE,
+      tilePoolCapacity: this.latestTilePoolCapacity ?? UNAVAILABLE,
+      tileMemoryBytes: this.latestTileMemoryBytes ?? UNAVAILABLE,
+    };
+  }
+
+  private latestDrawMetrics(): Pick<
+    FrameOverlayMetrics,
+    | "drawnTileCount"
+    | "drawnFallbackTileCount"
+    | "timeToSharpMs"
+    | "residencyBacklog"
+    | "cameraZoom"
+  > {
+    return {
+      drawnTileCount: this.latestDrawnTileCount ?? UNAVAILABLE,
+      drawnFallbackTileCount: this.latestDrawnFallbackTileCount ?? UNAVAILABLE,
+      timeToSharpMs: this.latestTimeToSharpMs ?? UNAVAILABLE,
+      residencyBacklog: this.latestResidencyBacklog ?? UNAVAILABLE,
+      cameraZoom: this.latestCameraZoom ?? UNAVAILABLE,
+    };
+  }
+
+  private recentStageStats(
+    now: number,
+  ): Readonly<Record<string, FrameStageStats>> {
+    const stages: Record<string, FrameStageStats> = {};
+    for (const name of this.stageNames) {
+      const values = this.collectRecentStage(name, now);
+      if (values.length > 0) stages[name] = summarize(values);
+    }
+    return stages;
+  }
+
+  private resetMetricSlots(): void {
+    this.tickDurations[this.writeIndex] = Number.NaN;
+    this.textWeights[this.writeIndex] = Number.NaN;
+    this.totalWidgetCounts[this.writeIndex] = Number.NaN;
+    this.cameraZooms[this.writeIndex] = Number.NaN;
+    this.tilePoolSlotsInUse[this.writeIndex] = Number.NaN;
+    this.tilePoolCapacities[this.writeIndex] = Number.NaN;
+    this.rasterJobsInFlight[this.writeIndex] = Number.NaN;
+    this.rasterJobsPostedTotals[this.writeIndex] = Number.NaN;
+    this.drawnTileCounts[this.writeIndex] = Number.NaN;
+    this.drawnFallbackTileCounts[this.writeIndex] = Number.NaN;
   }
 
   private clearStageSlots(): void {
@@ -195,6 +318,56 @@ export class FrameStats {
     ) {
       this.latestVisibleWidgetCount = sample.visibleWidgetCount;
     }
+    const textWeight = this.recordMetric(sample.textWeight, this.textWeights);
+    if (textWeight !== undefined) this.latestTextWeight = textWeight;
+    const totalWidgetCount = this.recordMetric(
+      sample.totalWidgetCount,
+      this.totalWidgetCounts,
+    );
+    if (totalWidgetCount !== undefined)
+      this.latestTotalWidgetCount = totalWidgetCount;
+    const cameraZoom = this.recordMetric(sample.cameraZoom, this.cameraZooms);
+    if (cameraZoom !== undefined) this.latestCameraZoom = cameraZoom;
+    const slotsInUse = this.recordMetric(
+      sample.tilePoolSlotsInUse,
+      this.tilePoolSlotsInUse,
+    );
+    if (slotsInUse !== undefined) this.latestTilePoolSlotsInUse = slotsInUse;
+    const poolCapacity = this.recordMetric(
+      sample.tilePoolCapacity,
+      this.tilePoolCapacities,
+    );
+    if (poolCapacity !== undefined) this.latestTilePoolCapacity = poolCapacity;
+    const jobsInFlight = this.recordMetric(
+      sample.rasterJobsInFlight,
+      this.rasterJobsInFlight,
+    );
+    if (jobsInFlight !== undefined)
+      this.latestRasterJobsInFlight = jobsInFlight;
+    this.recordMetric(
+      sample.rasterJobsPostedTotal,
+      this.rasterJobsPostedTotals,
+    );
+    const drawnTiles = this.recordMetric(
+      sample.drawnTileCount,
+      this.drawnTileCounts,
+    );
+    if (drawnTiles !== undefined) this.latestDrawnTileCount = drawnTiles;
+    const drawnFallbackTiles = this.recordMetric(
+      sample.drawnFallbackTileCount,
+      this.drawnFallbackTileCounts,
+    );
+    if (drawnFallbackTiles !== undefined)
+      this.latestDrawnFallbackTileCount = drawnFallbackTiles;
+  }
+
+  private recordMetric(
+    value: number | undefined,
+    target: Float64Array,
+  ): number | undefined {
+    const finite = finiteMetric(value);
+    target[this.writeIndex] = finite ?? Number.NaN;
+    return finite;
   }
 
   private recordTextSwitch(sample: FrameSample): void {
@@ -258,6 +431,102 @@ export class FrameStats {
     return values;
   }
 
+  private collectRecentIntervals(now: number): number[] {
+    const values: number[] = [];
+    this.forEachRecentIndex(now, (index) => {
+      if (this.intervalPresent[index] === 1)
+        values.push(this.intervals[index] ?? 0);
+    });
+    return values;
+  }
+
+  private collectRecentStage(name: string, now: number): number[] {
+    const stage = this.stageSamples.get(name);
+    if (!stage) return [];
+    const values: number[] = [];
+    this.forEachRecentIndex(now, (index) => {
+      if (stage.present[index] === 1) values.push(stage.values[index] ?? 0);
+    });
+    return values;
+  }
+
+  private maxRecentMetric(values: Float64Array, now: number): Statistic {
+    let maximum: number | undefined;
+    this.forEachRecentIndex(now, (index) => {
+      const value = values[index] ?? Number.NaN;
+      if (Number.isFinite(value) && (maximum === undefined || value > maximum))
+        maximum = value;
+    });
+    return maximum ?? UNAVAILABLE;
+  }
+
+  private jobsPostedPerSecond(now: number): Statistic {
+    let firstTime: number | undefined;
+    let firstValue: number | undefined;
+    let latestTime: number | undefined;
+    let latestValue: number | undefined;
+    const earliest = now - JOB_RATE_WINDOW_MS;
+    this.forEachIndex((index) => {
+      const time = this.sampleStartTimes[index] ?? Number.NaN;
+      const value = this.rasterJobsPostedTotals[index];
+      if (
+        time < earliest ||
+        time > now ||
+        !Number.isFinite(value) ||
+        !Number.isFinite(time)
+      )
+        return;
+      firstTime ??= time;
+      firstValue ??= value;
+      latestTime = time;
+      latestValue = value;
+    });
+    if (
+      firstTime === undefined ||
+      firstValue === undefined ||
+      latestTime === undefined ||
+      latestValue === undefined ||
+      latestTime <= firstTime
+    )
+      return UNAVAILABLE;
+    return (
+      (Math.max(0, latestValue - firstValue) * 1000) / (latestTime - firstTime)
+    );
+  }
+
+  private countRecentFrames(now: number): number {
+    let count = 0;
+    this.forEachRecentIndex(
+      now,
+      () => {
+        count += 1;
+      },
+      1000,
+    );
+    return count;
+  }
+
+  private forEachRecentIndex(
+    now: number,
+    visit: (index: number) => void,
+    windowMs = OVERLAY_WINDOW_MS,
+  ): void {
+    const earliest = now - windowMs;
+    this.forEachIndex((index) => {
+      const startTime = this.sampleStartTimes[index] ?? Number.NaN;
+      if (startTime >= earliest && startTime <= now) visit(index);
+    });
+  }
+
+  private forEachIndex(visit: (index: number) => void): void {
+    for (let offset = 0; offset < this.sampleCount; offset += 1) {
+      const index =
+        (this.writeIndex - this.sampleCount + offset + this.capacity) %
+        this.capacity;
+      visit(index);
+    }
+  }
+
   private collectStage(name: string): number[] {
     const stage = this.stageSamples.get(name);
     if (!stage) return [];
@@ -290,4 +559,14 @@ function summarize(values: readonly number[]): FrameStageStats {
     p99: nearestRank(values, 0.99),
     max: Math.max(...values),
   };
+}
+
+function finiteMetric(value: number | undefined): number | undefined {
+  return value !== undefined && Number.isFinite(value) ? value : undefined;
+}
+
+function stageDuration(timings: readonly { durationMs: number }[]): number {
+  let total = 0;
+  for (const timing of timings) total += timing.durationMs;
+  return total;
 }

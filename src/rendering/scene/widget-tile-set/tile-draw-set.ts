@@ -5,6 +5,12 @@ import {
   type TileSetRecordArrays,
 } from "./tile-records";
 import type { WidgetTileFrameState } from "./frame-state";
+import { TILE_DEVICE_SIZE } from "../tile-plan";
+import {
+  isBetterScale,
+  rasterScaleMismatch,
+  requestScale,
+} from "./text-tile-raster-scale-rule";
 
 const ANY_READY = 0;
 const GESTURE_CLOSE = 1;
@@ -87,6 +93,18 @@ export class TileDrawSet {
     return this.drawFallback;
   }
 
+  private currentCount(kind: number): number {
+    if (kind === HEADER_KIND) return this.drawHeaderCurrentCount;
+    if (kind === LABEL_KIND) return this.drawLabelCurrentCount;
+    return this.drawCurrentCount;
+  }
+
+  private incrementCurrentCount(kind: number): void {
+    if (kind === HEADER_KIND) this.drawHeaderCurrentCount += 1;
+    else if (kind === LABEL_KIND) this.drawLabelCurrentCount += 1;
+    else this.drawCurrentCount += 1;
+  }
+
   reset(): void {
     this.drawFallbackCount = 0;
     this.drawCurrentCount = 0;
@@ -97,7 +115,7 @@ export class TileDrawSet {
     this.missingTile = false;
   }
 
-  build(kind: number, size: number): void {
+  build(kind: number): void {
     const current = this.currentTarget(kind);
     const fallback = this.fallbackTarget(kind);
     const extentHeight =
@@ -112,23 +130,27 @@ export class TileDrawSet {
       this.frameState.visibleRight,
       kind === HEADER_KIND ? extentHeight : this.frameState.visibleBottom,
     );
-    const firstRow = kind === HEADER_KIND ? 0 : this.frameState.visibleFirstRow;
-    const lastRow = kind === HEADER_KIND ? 0 : this.frameState.visibleLastRow;
-    for (let row = firstRow; row <= lastRow; row += 1) {
+    if (kind === CONTENT_KIND) this.markMissingContentTiles();
+    this.addAtRestRecords(kind, current);
+    this.addFallbackRecords(kind, fallback);
+  }
+
+  private markMissingContentTiles(): void {
+    const size = TILE_DEVICE_SIZE / requestScale(CONTENT_KIND, this.frameState);
+    for (
+      let row = this.frameState.visibleFirstRow;
+      row <= this.frameState.visibleLastRow;
+      row += 1
+    ) {
       for (
         let column = this.frameState.visibleFirstColumn;
         column <= this.frameState.visibleLastColumn;
         column += 1
       ) {
-        if (
-          kind === CONTENT_KIND &&
-          !this.isAreaCovered(column * size, row * size, size, size)
-        )
+        if (!this.isAreaCovered(column * size, row * size, size, size))
           this.missingTile = true;
       }
     }
-    this.addAtRestRecords(kind, current);
-    this.addFallbackRecords(kind, fallback);
   }
 
   isAreaCovered(x: number, y: number, width: number, height: number): boolean {
@@ -232,10 +254,10 @@ export class TileDrawSet {
         continue;
       this.pushUnique(current, kind, index);
     }
-    if (kind !== CONTENT_KIND || !this.frameState.zoomGestureActive) return;
+    if (!this.frameState.zoomGestureActive) return;
     for (let index = 0; index < this.frameState.recordCount; index += 1) {
-      if (!this.shouldAddGestureCurrent(index)) continue;
-      this.pushSortedGestureCurrent(current, index);
+      if (!this.shouldAddGestureCurrent(index, kind)) continue;
+      this.pushSortedGestureCurrent(current, kind, index);
     }
   }
 
@@ -251,15 +273,17 @@ export class TileDrawSet {
     return this.records.rasterScale[index] === this.frameState.atRestScale;
   }
 
-  private shouldAddGestureCurrent(index: number): boolean {
+  private shouldAddGestureCurrent(index: number, kind: number): boolean {
     return (
       this.records.rasterScale[index] !== this.frameState.atRestScale &&
-      this.records.epoch[index] === this.frameState.epoch &&
       this.records.active[index] === 1 &&
       this.records.ready[index] === 1 &&
-      this.records.kind[index] === CONTENT_KIND &&
+      this.records.kind[index] === kind &&
+      (kind !== LABEL_KIND || this.isCurrentLabel(index)) &&
+      (kind !== CONTENT_KIND ||
+        this.records.epoch[index] === this.frameState.epoch) &&
       this.overlapsVisible(index) &&
-      this.hasBetterCurrentOverlap(index)
+      this.hasBetterCurrentOverlap(index, kind)
     );
   }
 
@@ -319,8 +343,8 @@ export class TileDrawSet {
       return false;
     if (this.records.rasterScale[index] === this.frameState.atRestScale)
       return true;
-    return kind === CONTENT_KIND && this.frameState.zoomGestureActive
-      ? this.shouldDrawCurrentGesture(index)
+    return this.frameState.zoomGestureActive
+      ? this.shouldDrawCurrentGesture(index, kind)
       : false;
   }
 
@@ -332,16 +356,20 @@ export class TileDrawSet {
     );
   }
 
-  private shouldDrawCurrentGesture(index: number): boolean {
-    for (let current = 0; current < this.drawCurrentCount; current += 1) {
-      if (this.drawCurrent[current] === index) return true;
+  private shouldDrawCurrentGesture(index: number, kind: number): boolean {
+    const target = this.currentTarget(kind);
+    const count = this.currentCount(kind);
+    for (let current = 0; current < count; current += 1) {
+      if (target[current] === index) return true;
     }
     return false;
   }
 
-  private hasBetterCurrentOverlap(index: number): boolean {
-    for (let current = 0; current < this.drawCurrentCount; current += 1) {
-      const candidate = this.drawCurrent[current] ?? -1;
+  private hasBetterCurrentOverlap(index: number, kind: number): boolean {
+    const target = this.currentTarget(kind);
+    const count = this.currentCount(kind);
+    for (let current = 0; current < count; current += 1) {
+      const candidate = target[current] ?? -1;
       if (
         candidate >= 0 &&
         this.overlapsRecords(index, candidate) &&
@@ -473,41 +501,23 @@ export class TileDrawSet {
     }
     if (this.records.kind[first] === CONTENT_KIND)
       return this.isBetterContentRecord(first, second);
-    return this.isBetterScaleRecord(first, second);
+    return isBetterScale(
+      this.records.kind[first] ?? CONTENT_KIND,
+      this.records.rasterScale[first] ?? 0,
+      this.records.rasterScale[second] ?? 0,
+      this.frameState,
+    );
   }
 
   private isBetterContentRecord(first: number, second: number): boolean {
     const firstEpoch = this.records.epoch[first] ?? 0;
     const secondEpoch = this.records.epoch[second] ?? 0;
     if (firstEpoch !== secondEpoch) return firstEpoch > secondEpoch;
-    if (this.frameState.zoomGestureActive) {
-      const firstMismatch = rasterScaleMismatch(
-        this.records.rasterScale[first] ?? 0,
-        this.frameState.gestureTargetScale,
-      );
-      const secondMismatch = rasterScaleMismatch(
-        this.records.rasterScale[second] ?? 0,
-        this.frameState.gestureTargetScale,
-      );
-      if (firstMismatch !== secondMismatch)
-        return firstMismatch < secondMismatch;
-      return (
-        (this.records.rasterScale[first] ?? 0) >
-        (this.records.rasterScale[second] ?? 0)
-      );
-    }
-    return this.isBetterScaleRecord(first, second);
-  }
-
-  private isBetterScaleRecord(first: number, second: number): boolean {
-    const firstAtRest =
-      (this.records.rasterScale[first] ?? 0) === this.frameState.atRestScale;
-    const secondAtRest =
-      (this.records.rasterScale[second] ?? 0) === this.frameState.atRestScale;
-    if (firstAtRest !== secondAtRest) return firstAtRest;
-    return (
-      (this.records.rasterScale[first] ?? 0) >
-      (this.records.rasterScale[second] ?? 0)
+    return isBetterScale(
+      CONTENT_KIND,
+      this.records.rasterScale[first] ?? 0,
+      this.records.rasterScale[second] ?? 0,
+      this.frameState,
     );
   }
 
@@ -547,20 +557,13 @@ export class TileDrawSet {
     kind: number,
     recordIndex: number,
   ): void {
-    const count =
-      kind === HEADER_KIND
-        ? this.drawHeaderCurrentCount
-        : kind === LABEL_KIND
-          ? this.drawLabelCurrentCount
-          : this.drawCurrentCount;
+    const count = this.currentCount(kind);
     for (let index = 0; index < count; index += 1) {
       if (target[index] === recordIndex) return;
     }
     if (count >= target.length) return;
     target[count] = recordIndex;
-    if (kind === HEADER_KIND) this.drawHeaderCurrentCount += 1;
-    else if (kind === LABEL_KIND) this.drawLabelCurrentCount += 1;
-    else this.drawCurrentCount += 1;
+    this.incrementCurrentCount(kind);
   }
 
   private clipArea(
@@ -593,10 +596,12 @@ export class TileDrawSet {
 
   private pushSortedGestureCurrent(
     target: Int32Array,
+    kind: number,
     recordIndex: number,
   ): void {
-    if (this.drawCurrentCount >= target.length) return;
-    let position = this.drawCurrentCount;
+    const count = this.currentCount(kind);
+    if (count >= target.length) return;
+    let position = count;
     while (
       position > 0 &&
       this.isBetterRecord(target[position - 1] ?? -1, recordIndex)
@@ -605,10 +610,6 @@ export class TileDrawSet {
       position -= 1;
     }
     target[position] = recordIndex;
-    this.drawCurrentCount += 1;
+    this.incrementCurrentCount(kind);
   }
-}
-
-function rasterScaleMismatch(scale: number, target: number): number {
-  return Math.max(scale / target, target / scale);
 }

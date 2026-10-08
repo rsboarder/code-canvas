@@ -1,10 +1,6 @@
 export { WidgetTiles } from "./widget-tiles";
-export {
-  TileSetPlanner,
-  coarseRasterScale,
-  gestureStepRasterScale,
-} from "./tile-sets";
-export type { TileRecordView } from "./widget-tiles";
+export { TileSetPlanner } from "./tile-sets";
+export type { TileRecordView } from "./tile-records";
 export {
   CONTENT_KIND,
   HEADER_KIND,

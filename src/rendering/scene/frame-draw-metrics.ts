@@ -1,4 +1,5 @@
 export interface FrameDrawMetrics {
+  textWeight: number;
   tileMemoryBytes: number;
   missingTile: boolean;
   visibleWidgetCount: number;

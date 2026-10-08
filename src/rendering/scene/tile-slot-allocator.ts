@@ -38,6 +38,10 @@ export class TileSlotAllocator {
     return this.capacityValue;
   }
 
+  get residentCount(): number {
+    return this.keyToSlot.size;
+  }
+
   grow(newCapacity: number): void {
     if (newCapacity <= this.capacityValue) return;
     if (!Number.isInteger(newCapacity)) {

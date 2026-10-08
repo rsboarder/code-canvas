@@ -1,7 +1,7 @@
 import type { CameraView } from "../../board/index";
-import { Camera } from "../../board/index";
 import type { GesturePhase } from "../../shared/frame";
 import type { Rect } from "../../shared/geometry/geometry";
+import type { DetailFrame } from "../detail-fade";
 import type { CodeTextMetrics } from "../text/text-metrics";
 import { TilePass, type TileDrawContext } from "../passes/tile-pass";
 import type { Viewport } from "../viewport";
@@ -16,19 +16,15 @@ import {
 } from "./tile-frame-painter";
 import { computeTilePoolCapacity, tilePoolGrowthTarget } from "./tile-plan";
 import { TimeToSharpClock } from "./time-to-sharp-clock";
-import { TileJobQueue, type TileJobOwner } from "./tile-job-queue";
+import { TileJobQueue } from "./tile-job-queue";
+import { TileLifecycle } from "./tile-lifecycle";
 import type {
   TileContentSource,
   TileLabelContentSource,
 } from "./tile-kind-jobs";
-import { bodyViewWindow } from "./tile-view-window";
-import {
-  CONTENT_KIND,
-  HEADER_KIND,
-  LABEL_KIND,
-  WidgetTiles,
-} from "./widget-tile-set";
+import { CONTENT_KIND, WidgetTiles } from "./widget-tile-set";
 import type { WidgetId, WidgetTable } from "./widget-table";
+import type { VisibleBodyProjection } from "../visible-body-projection";
 
 export interface TileDebugSnapshot {
   readonly rasterScales: readonly number[];
@@ -37,6 +33,7 @@ export interface TileDebugSnapshot {
 
 export interface TileDemand {
   capacity: number;
+  inUse?: number;
   requested: number;
   pinned: number;
   inFlight: number;
@@ -49,12 +46,20 @@ export interface TileDemand {
   minimapActive: boolean;
 }
 
+export interface FrameTileMetrics {
+  capacity: number;
+  inUse: number;
+  inFlight: number;
+  posted: number;
+}
+
 interface TileResidencyConfig {
   readonly metrics: Pick<CodeTextMetrics, "narrowAdvance">;
   readonly font: { readonly family: string; readonly size: number };
   readonly viewport: Viewport;
   readonly table: WidgetTable;
   readonly tableTexture: WebGLTexture;
+  readonly visibleBodies: VisibleBodyProjection;
   readonly titleSourceFor: (fileId: string, path: string) => TileContentSource;
   readonly labelSourceFor: (
     path: string,
@@ -64,15 +69,15 @@ interface TileResidencyConfig {
 }
 
 export class TileResidency {
-  readonly pool: TilePool;
-  private readonly tilePass: TilePass;
-  private readonly jobQueue: TileJobQueue;
-  private readonly painter: TileFramePainter;
+  pool: TilePool;
+  private tilePass: TilePass;
+  private jobQueue: TileJobQueue;
+  private painter: TileFramePainter;
   private readonly table: WidgetTable;
+  private readonly visibleBodies: VisibleBodyProjection;
   private readonly widgets = new Map<string, WidgetTiles>();
   private readonly registeredIds: string[] = [];
   private readonly filePaths = new Map<string, string>();
-  private readonly keyOwners = new Map<string, WidgetTiles>();
   private readonly visibleWidgets: WidgetTiles[] = [];
   private readonly viewportInput: Viewport = {
     width: 0,
@@ -80,26 +85,15 @@ export class TileResidency {
     devicePixelRatio: 1,
   };
   private readonly missingFrame = { x: 0, y: 0, width: 0, height: 0 };
-  private readonly missingWindow = { left: 0, top: 0, right: 0, bottom: 0 };
-  private readonly missingInput = {
-    camera: new Camera(),
-    viewport: this.viewportInput,
-    frame: this.missingFrame,
-    bodyTop: 0,
-    contentScroll: 0,
-    targetZoom: 0,
-    focusX: 0,
-    focusY: 0,
-  };
-  private readonly ownerForKey = (key: string): TileJobOwner | undefined =>
-    this.ownerForKeyValue(key);
   private readonly paintInput: TileFramePaintInput = {
     widgets: this.visibleWidgets,
     count: 0,
-    detailIsMinimap: false,
+    drawLabels: false,
+    drawContent: true,
     hiddenBodyId: undefined,
   };
   private readonly metrics: FrameDrawMetrics = {
+    textWeight: 0,
     tileMemoryBytes: 0,
     missingTile: false,
     visibleWidgetCount: 0,
@@ -114,7 +108,10 @@ export class TileResidency {
   };
   private readonly titleSourceFor: TileResidencyConfig["titleSourceFor"];
   private readonly labelSourceFor: TileResidencyConfig["labelSourceFor"];
+  private readonly rasterMetrics: Pick<CodeTextMetrics, "narrowAdvance">;
+  private readonly rasterFont: string;
   private readonly recordCapacity: number;
+  private lifecycle: TileLifecycle;
   private redrawCallback: (() => void) | undefined;
   private growthTimer: ReturnType<typeof setTimeout> | undefined;
   private growthTarget = 0;
@@ -150,8 +147,11 @@ export class TileResidency {
 
   constructor(gl: WebGL2RenderingContext, config: TileResidencyConfig) {
     this.table = config.table;
+    this.visibleBodies = config.visibleBodies;
     this.titleSourceFor = config.titleSourceFor;
     this.labelSourceFor = config.labelSourceFor;
+    this.rasterMetrics = config.metrics;
+    this.rasterFont = `${String(config.font.size)}px ${config.font.family}`;
     const { width, height, devicePixelRatio } = config.viewport;
     const capacity = Math.max(
       128,
@@ -165,11 +165,11 @@ export class TileResidency {
       config.tableTexture,
       capacity + TILE_CELL_LAYERS * TILE_CELLS_PER_LAYER,
     );
-    this.jobQueue = new TileJobQueue({
+    this.jobQueue = new TileJobQueue(this.rasterMetrics);
+    this.lifecycle = new TileLifecycle({
       pool: this.pool,
-      metrics: config.metrics,
-      rasterFont: `${String(config.font.size)}px ${config.font.family}`,
-      ownerForKey: this.ownerForKey,
+      jobQueue: this.jobQueue,
+      rasterFont: this.rasterFont,
     });
     this.painter = new TileFramePainter({
       tilePass: this.tilePass,
@@ -199,11 +199,15 @@ export class TileResidency {
     if (!this.isRegistered(fileId) || source.fileId !== fileId) return;
     let widget = this.widgets.get(fileId);
     if (!widget) {
-      widget = new WidgetTiles(fileId, this.pool, this.recordCapacity, (key) =>
-        this.keyOwners.delete(key),
-      );
+      widget = new WidgetTiles(fileId, this.recordCapacity);
       this.widgets.set(fileId, widget);
+      this.lifecycle.attach(widget);
     }
+    this.lifecycle.sourceChanged(
+      widget,
+      source.filePath,
+      source.label?.identity ?? widget.contentSource?.label?.identity,
+    );
     widget.setContentSource(source);
   }
 
@@ -293,12 +297,12 @@ export class TileResidency {
       ) {
         const record = widget.findRecord(
           CONTENT_KIND,
-          widget.requestedScale,
+          widget.requestScale(CONTENT_KIND),
           column,
           row,
         );
-        if (record >= 0 && widget.isRecordReady(record))
-          scales.push(widget.recordRasterScale(record));
+        if (record >= 0 && widget.tileRecords.records.ready[record])
+          scales.push(widget.tileRecords.records.rasterScale[record] ?? 1);
       }
     }
     return { rasterScales: scales, timeToSharpMs: this.lastTimeToSharpMs };
@@ -306,16 +310,24 @@ export class TileResidency {
 
   tileDemand(out: TileDemand): void {
     out.capacity = this.pool.fullCapacity;
+    out.inUse = this.pool.fullSlotsInUse;
     out.requested = this.tileRequests;
     out.pinned = this.pool.fullPinnedCount();
-    out.inFlight = this.jobQueue.inFlightCount;
-    out.posted = this.jobQueue.postedTotal;
-    out.stale = this.jobQueue.staleTotal;
-    out.uploadFailed = this.jobQueue.uploadFailedTotal;
+    out.inFlight = this.lifecycle.inFlightCount;
+    out.posted = this.lifecycle.postedTotal;
+    out.stale = this.lifecycle.staleTotal;
+    out.uploadFailed = this.lifecycle.uploadFailedTotal;
     out.visibleExact = this.visibleTextExact;
     out.clockRunning = this.timeToSharpClock.running;
     out.gestureActive = this.zoomGestureActive;
     out.minimapActive = this.minimapActive;
+  }
+
+  frameTileMetrics(out: FrameTileMetrics): void {
+    out.capacity = this.pool.fullCapacity;
+    out.inUse = this.pool.fullSlotsInUse;
+    out.inFlight = this.lifecycle.inFlightCount;
+    out.posted = this.lifecycle.postedTotal;
   }
 
   // Compare the handed-back scroll because this stage runs before drain re-plans it.
@@ -335,32 +347,34 @@ export class TileResidency {
     bodyTop: number,
     deadline: number,
   ): number {
-    const uploadedTiles = this.jobQueue.drainResults(this.ownerForKey);
+    const uploadedTiles = this.lifecycle.drainResults();
     this.viewportInput.width = viewport.width;
     this.viewportInput.height = viewport.height;
     this.viewportInput.devicePixelRatio = viewport.devicePixelRatio;
     this.painter.setBodyTopCss(bodyTop);
     this.collectVisible(camera, this.viewportInput, bodyTop);
     this.planVisible(camera, this.viewportInput, bodyTop);
-    this.unpinAll();
-    this.jobQueue.beginFrame(deadline);
+    this.lifecycle.beginFrame(deadline);
     this.pinVisible();
     this.requestVisible();
+    this.tileRequests = this.lifecycle.requestedTotal;
+    this.missingTiles = this.lifecycle.missingTotal;
     this.checkPoolGrowth();
     return uploadedTiles;
   }
 
-  buildFrameInstances(detailIsMinimap: boolean): FrameDrawMetrics {
+  buildFrameInstances(
+    frame: Pick<DetailFrame, "contentAlpha" | "labelAlpha">,
+  ): FrameDrawMetrics {
     this.tilePass.beginFrame();
     resetFrameDrawMetrics(this.metrics);
     this.metrics.visibleWidgetCount = this.visibleWidgets.length;
     if (!this.jobQueue.rasterError()) {
       this.paintInput.count = this.visibleWidgets.length;
-      this.paintInput.detailIsMinimap = detailIsMinimap;
+      this.paintInput.drawLabels = frame.labelAlpha > 0;
+      this.paintInput.drawContent = frame.contentAlpha > 0;
       this.paintInput.hiddenBodyId = this.hiddenBodyId;
       this.painter.draw(this.paintInput);
-    } else {
-      this.tilePass.markTitleBoundary();
     }
     this.tilePass.endFrame();
     this.metrics.tileMemoryBytes = this.pool.memoryBytes;
@@ -379,13 +393,44 @@ export class TileResidency {
     this.hiddenBodyId = fileId;
   }
 
-  dispose(): void {
-    if (this.growthTimer !== undefined) {
-      clearTimeout(this.growthTimer);
-      this.growthTimer = undefined;
-      this.growthScheduled = false;
-    }
+  restore(gl: WebGL2RenderingContext, tableTexture: WebGLTexture): void {
+    const poolCapacity = this.pool.fullCapacity;
+    this.cancelPoolGrowth();
     this.jobQueue.dispose();
+    this.pool = new TilePool(gl, poolCapacity);
+    this.tilePass = new TilePass(
+      gl,
+      this.pool,
+      tableTexture,
+      poolCapacity + TILE_CELL_LAYERS * TILE_CELLS_PER_LAYER,
+    );
+    this.jobQueue = new TileJobQueue(this.rasterMetrics);
+    this.lifecycle.restorePool(this.pool, this.jobQueue);
+    this.painter = new TileFramePainter({
+      tilePass: this.tilePass,
+      pool: this.pool,
+      metrics: this.metrics,
+    });
+    this.lastTextReady = false;
+    this.visibleTextExact = false;
+    this.visibleMissingContent = false;
+    this.tileRequests = 0;
+    this.missingTiles = 0;
+    if (this.redrawCallback) this.jobQueue.onResult(this.redrawCallback);
+    this.redrawCallback?.();
+  }
+
+  dispose(): void {
+    this.cancelPoolGrowth();
+    this.jobQueue.dispose();
+  }
+
+  private cancelPoolGrowth(): void {
+    if (this.growthTimer === undefined) return;
+    clearTimeout(this.growthTimer);
+    this.growthTimer = undefined;
+    this.growthScheduled = false;
+    this.growthTarget = 0;
   }
 
   private collectVisible(
@@ -395,34 +440,16 @@ export class TileResidency {
   ): void {
     this.visibleWidgets.length = 0;
     this.visibleMissingContent = false;
+    this.visibleBodies.refresh(camera, viewport, bodyTop);
     for (const fileId of this.registeredIds) {
       const row = this.table.rowFor(fileId as WidgetId);
       if (row === undefined) continue;
       let widget = this.widgets.get(fileId);
       const frame = widget?.frame ?? this.missingFrame;
       if (!this.table.readFrame(row, frame)) continue;
-      const input =
-        widget?.windowInput ??
-        (widget
-          ? {
-              camera,
-              viewport,
-              frame: widget.frame,
-              bodyTop,
-              contentScroll: this.table.contentScrollAt(row),
-              targetZoom: 0,
-              focusX: 0,
-              focusY: 0,
-            }
-          : this.missingInput);
-      this.rememberWindowInput(widget, input);
-      input.camera = camera;
-      input.viewport = viewport;
-      input.frame = frame;
-      input.bodyTop = bodyTop;
-      input.contentScroll = this.table.contentScrollAt(row);
-      const window = widget?.visibleWindow ?? this.missingWindow;
-      if (!bodyViewWindow(input, window)) continue;
+      if (widget) this.updateWindowInput(widget, camera, bodyTop, row);
+      const window = this.visibleBodies.windowAt(row);
+      if (!window) continue;
       if (!widget) {
         const path = this.filePaths.get(fileId);
         if (!path) {
@@ -496,71 +523,24 @@ export class TileResidency {
     this.lastTextReady = ready;
   }
 
-  private unpinAll(): void {
-    for (const fileId of this.registeredIds) {
-      const widget = this.widgets.get(fileId);
-      if (widget) this.jobQueue.unpinRecords(widget);
-    }
-  }
-
   private pinVisible(): void {
     for (const widget of this.visibleWidgets) {
-      this.jobQueue.pinDrawSet(widget);
+      this.lifecycle.pin(widget);
     }
   }
 
   private requestVisible(): void {
-    this.tileRequests = 0;
-    this.missingTiles = 0;
     const priorityFileId = this.priorityFileId;
     if (priorityFileId !== undefined) {
       for (const widget of this.visibleWidgets) {
         if (widget.fileId !== priorityFileId) continue;
-        this.requestWidget(widget);
+        this.lifecycle.request(widget);
         break;
       }
     }
     for (const widget of this.visibleWidgets) {
       if (widget.fileId === priorityFileId) continue;
-      this.requestWidget(widget);
-    }
-  }
-
-  private requestWidget(widget: WidgetTiles): void {
-    if (!widget.contentSource) return;
-    if (widget.requestLabel) {
-      const record = widget.ensureRecord(
-        LABEL_KIND,
-        widget.requestedLabelScale,
-        0,
-        0,
-      );
-      this.registerRecord(widget, record);
-      if (record >= 0) this.jobQueue.ensureTile(widget, record);
-    }
-    for (let header = 0; header < widget.requestHeaderCount; header += 1) {
-      const record = widget.ensureRecord(
-        HEADER_KIND,
-        widget.requestedHeaderScale,
-        widget.requestHeaderColumns[header] ?? 0,
-        0,
-      );
-      this.registerRecord(widget, record);
-      if (record >= 0) this.jobQueue.ensureTile(widget, record);
-    }
-    for (let request = 0; request < widget.requestCount; request += 1) {
-      const record = widget.ensureRecord(
-        CONTENT_KIND,
-        widget.requestScales[request] ?? 1,
-        widget.requestColumns[request] ?? 0,
-        widget.requestRows[request] ?? 0,
-      );
-      this.registerRecord(widget, record);
-      if (record >= 0) {
-        this.jobQueue.ensureTile(widget, record);
-        this.tileRequests += 1;
-        if (!widget.isRecordReady(record)) this.missingTiles += 1;
-      }
+      this.lifecycle.request(widget);
     }
   }
 
@@ -577,11 +557,6 @@ export class TileResidency {
     this.growthTarget = target;
     this.growthScheduled = true;
     this.growthTimer = setTimeout(this.growPool, 0);
-  }
-
-  private registerRecord(widget: WidgetTiles, record: number): void {
-    const key = record >= 0 ? widget.recordKey(record) : undefined;
-    if (key) this.keyOwners.set(key, widget);
   }
 
   private insertVisible(widget: WidgetTiles): void {
@@ -603,27 +578,15 @@ export class TileResidency {
   private removeWidget(fileId: string, index: number): void {
     const widget = this.widgets.get(fileId);
     if (widget) {
-      for (let record = 0; record < widget.recordCapacity; record += 1) {
-        const key = widget.recordKey(record);
-        if (key) this.keyOwners.delete(key);
-      }
-      widget.release();
+      this.lifecycle.detach(widget);
     }
     this.widgets.delete(fileId);
     this.registeredIds.splice(index, 1);
   }
 
-  private ownerForKeyValue(key: string): TileJobOwner | undefined {
-    return this.keyOwners.get(key);
-  }
-
   private createWidget(fileId: string, path: string, frame: Rect): WidgetTiles {
-    const widget = new WidgetTiles(
-      fileId,
-      this.pool,
-      this.recordCapacity,
-      (key) => this.keyOwners.delete(key),
-    );
+    const widget = new WidgetTiles(fileId, this.recordCapacity);
+    this.lifecycle.attach(widget);
     widget.frame.x = frame.x;
     widget.frame.y = frame.y;
     widget.frame.width = frame.width;
@@ -638,6 +601,30 @@ export class TileResidency {
   ): void {
     if (!widget || widget.windowInput) return;
     widget.windowInput = input;
+  }
+
+  private updateWindowInput(
+    widget: WidgetTiles,
+    camera: CameraView,
+    bodyTop: number,
+    row: number,
+  ): void {
+    const input = widget.windowInput ?? {
+      camera,
+      viewport: this.viewportInput,
+      frame: widget.frame,
+      bodyTop,
+      contentScroll: this.table.contentScrollAt(row),
+      targetZoom: 0,
+      focusX: 0,
+      focusY: 0,
+    };
+    this.rememberWindowInput(widget, input);
+    input.camera = camera;
+    input.viewport = this.viewportInput;
+    input.frame = widget.frame;
+    input.bodyTop = bodyTop;
+    input.contentScroll = this.table.contentScrollAt(row);
   }
 
   private refreshLabelSource(widget: WidgetTiles): void {

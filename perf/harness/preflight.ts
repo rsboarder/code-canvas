@@ -1,6 +1,7 @@
 import type { Browser, CDPSession, Page } from "@playwright/test";
 
 import { classifyTrace, type TraceEvents, type TraceMetrics } from "./trace";
+import { isRecord } from "./is-record";
 import {
   REFERENCE_THRESHOLDS,
   type EnvironmentReport,
@@ -349,8 +350,4 @@ function isInvalidNoiseFloor(value: unknown): value is InvalidNoiseFloor {
   return (
     isRecord(value) && value.valid === false && typeof value.reason === "string"
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

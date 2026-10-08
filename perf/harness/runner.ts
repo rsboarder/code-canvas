@@ -1,33 +1,30 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { relative, join } from "node:path";
 import { promisify } from "node:util";
-import { chromium, type CDPSession, type Page } from "@playwright/test";
+import { type CDPSession, type Page } from "@playwright/test";
 
 import { checkCoverage, requiredScenarios } from "./coverage";
 import {
   classifyNoiseFloor,
-  collectEnvironment,
   evaluateNoiseFloor,
-  evaluatePreflight,
   measureNoiseFloor,
   type NoiseFloor,
 } from "./preflight";
 import {
   evaluateScenario,
   renderMarkdownReport,
+  renderSummaryTable,
   serializeReport,
   traceArchive,
   type Baseline,
   type BudgetConfig,
-  type CameraCheck,
-  type CameraRangeCheck,
-  type GestureTiming,
   type HarnessMode,
   type HarnessReport,
   type ScenarioRun,
 } from "./report";
 import { runScenario } from "./scenario-execution";
+import { loadBaseline } from "./baseline";
 import {
   SETTLE_TIMEOUT_MS,
   unsettledDetail,
@@ -42,7 +39,7 @@ import {
   waitForApplicationBridge,
 } from "./run-preparation";
 import { recordTrace, type InvalidMeasurement } from "./trace";
-import { HEADED_WINDOW_ARGS, openHarnessPage } from "./harness-page";
+import { openHarnessSession, type HarnessEnvironment } from "./harness-session";
 import { scenarioAtDevicePixelRatio } from "./scenario-scale";
 import type { PerfFile } from "../../src/performance/bridge";
 import { isEditorOnlyScenario, type Scenario } from "../scenarios/schema";
@@ -55,14 +52,9 @@ import largeEditScenario from "../scenarios/large-edit";
 import lineBreakScenario from "../scenarios/line-break";
 import loadScenario from "../scenarios/pan-initial-load";
 
-type ScenarioBudgetOverride = NonNullable<
-  BudgetConfig["scenarioOverrides"]
->[string];
-
 const execFileAsync = promisify(execFile);
 const DEFAULT_DATASET_ROOT = "fixtures/reference-dataset";
-const DEFAULT_PREVIEW_PORT = 4173;
-const scenarioList = [
+export const scenarioList = [
   panScenario,
   zoomScenario,
   densityScenario,
@@ -91,7 +83,7 @@ export interface ScenarioRunnerDependencies {
   readonly scenarios?: readonly Scenario[];
   readonly specText?: string;
   readonly noiseFloor?: NoiseFloor;
-  readonly environment?: Awaited<ReturnType<typeof collectEnvironment>>;
+  readonly environment?: HarnessEnvironment;
   readonly baseline?: Baseline;
   readonly fileSystem?: RunnerFileSystem;
   readonly resultDirectory?: string;
@@ -230,7 +222,7 @@ async function measureScenarios(
     scenarios: evaluations,
   };
   await writeReport(options, report);
-  return { verdict, report, output: renderTable(report) };
+  return { verdict, report, output: renderSummaryTable(report) };
 }
 
 async function collectMeasuredRuns(
@@ -327,41 +319,6 @@ async function writeReport(
   );
 }
 
-function renderTable(report: HarnessReport): string {
-  const lines = [
-    `VERDICT: ${report.verdict}`,
-    "",
-    "Scenario | App task ms | p99 ms | Delta to baseline | Gesture ratio | Camera",
-    "--- | ---: | ---: | ---: | ---: | ---",
-  ];
-  for (const scenario of report.scenarios) {
-    const metrics = scenario.worstRun.metrics;
-    lines.push(
-      `${scenario.scenario} | ${format(metrics.applicationTaskMs)} | ${format(metrics.p99)} | ${String(scenario.regressions.length)} | ${gestureRatioText(metrics.gesture)} | ${cameraCheckText(metrics.camera, metrics.cameraRange)}`,
-    );
-  }
-  return lines.join("\n");
-}
-
-function format(value: number | "unavailable"): string {
-  return typeof value === "number" ? value.toFixed(2) : value;
-}
-
-function gestureRatioText(gesture: GestureTiming | undefined): string {
-  return gesture ? gesture.ratio.toFixed(2) : "n/a";
-}
-
-function cameraCheckText(
-  camera: CameraCheck | undefined,
-  cameraRange: CameraRangeCheck | undefined,
-): string {
-  if (!camera?.checked) return "skipped";
-  const final = camera.withinTolerance ? "ok" : "mismatch";
-  if (!cameraRange?.recorded) return final;
-  const { minScale, maxScale } = cameraRange.recorded;
-  return `${final} [${minScale.toFixed(2)}-${maxScale.toFixed(2)}]`;
-}
-
 function invalidMeasurementReason(result: InvalidMeasurement): string {
   return result.detail ? `${result.reason}: ${result.detail}` : result.reason;
 }
@@ -369,7 +326,7 @@ function invalidMeasurementReason(result: InvalidMeasurement): string {
 function invalidResult(
   mode: HarnessMode,
   reason: string,
-  environment: Awaited<ReturnType<typeof collectEnvironment>> | null = null,
+  environment: HarnessEnvironment | null = null,
   noiseFloor: NoiseFloor | null = null,
 ): HarnessResult {
   const report: HarnessReport = {
@@ -396,10 +353,6 @@ function emptyNoiseFloor(): NoiseFloor {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function safeName(name: string): string {
   return name
     .toLowerCase()
@@ -416,86 +369,6 @@ const defaultFileSystem: RunnerFileSystem = {
   },
   readFile: async (path) => readFile(path, "utf8"),
 };
-
-export async function loadBudgetConfig(
-  path = "perf/budgets.json",
-): Promise<BudgetConfig> {
-  const raw = JSON.parse(await readFile(path, "utf8")) as Record<
-    string,
-    unknown
-  >;
-  const scenarioOverrides = parseScenarioOverrides(raw.scenarioOverrides);
-  return {
-    warmupRuns: budgetValue(raw.warmupRuns),
-    measuredRuns: budgetValue(raw.measuredRuns),
-    applicationTaskMs: budgetValue(raw.applicationTaskMs),
-    longIntervalMs: budgetValue(raw.longIntervalMs),
-    allowedRegression: budgetValue(raw.allowedRegression),
-    ...(scenarioOverrides ? { scenarioOverrides } : {}),
-  };
-}
-
-function budgetValue(value: unknown): number {
-  if (typeof value === "number") return value;
-  if (isRecord(value) && typeof value.value === "number") return value.value;
-  throw new TypeError("budget value is missing");
-}
-
-function parseScenarioOverrides(
-  entry: unknown,
-): Record<string, ScenarioBudgetOverride> | undefined {
-  if (entry === undefined) return undefined;
-  if (!isPlainRecord(entry) || !isPlainRecord(entry.value))
-    throw new TypeError("scenario overrides value is missing");
-  const overrides: Record<string, ScenarioBudgetOverride> = {};
-  for (const [scenario, value] of Object.entries(entry.value)) {
-    overrides[scenario] = parseScenarioOverride(scenario, value);
-  }
-  return overrides;
-}
-
-function parseScenarioOverride(
-  scenario: string,
-  value: unknown,
-): ScenarioBudgetOverride {
-  if (!isPlainRecord(value)) throw invalidScenarioOverride(scenario);
-  const applicationTaskMs = value.applicationTaskMs;
-  const extraMissedFramesPerRun = value.extraMissedFramesPerRun;
-  if (applicationTaskMs === undefined && extraMissedFramesPerRun === undefined)
-    throw invalidScenarioOverride(scenario);
-  if (
-    applicationTaskMs !== undefined &&
-    !isPositiveFiniteNumber(applicationTaskMs)
-  )
-    throw invalidScenarioOverride(scenario);
-  if (
-    extraMissedFramesPerRun !== undefined &&
-    !isNonnegativeInteger(extraMissedFramesPerRun)
-  )
-    throw invalidScenarioOverride(scenario);
-  return {
-    ...(applicationTaskMs === undefined ? {} : { applicationTaskMs }),
-    ...(extraMissedFramesPerRun === undefined
-      ? {}
-      : { extraMissedFramesPerRun }),
-  };
-}
-
-function isPositiveFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
-function isNonnegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
-
-function invalidScenarioOverride(scenario: string): TypeError {
-  return new TypeError(`invalid budget override for scenario "${scenario}"`);
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export async function runHarness(
   options: HarnessOptions,
@@ -528,29 +401,16 @@ export async function runSelfTest(options: {
 }
 
 async function runLiveHarness(options: HarnessOptions): Promise<HarnessResult> {
-  let preview: ReturnType<typeof spawn> | undefined;
-  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  const session = await openHarnessSession(options.mode);
+  if (session.kind === "invalid")
+    return invalidResult(
+      options.mode,
+      session.reason,
+      session.environment,
+      session.noiseFloor,
+    );
   try {
-    await execFileAsync("pnpm", ["build"], {
-      env: { ...process.env, VITE_PERF_HARNESS: "1" },
-    });
-    preview = spawn("pnpm", previewArguments(DEFAULT_PREVIEW_PORT), {
-      env: process.env,
-      stdio: "ignore",
-    });
-    const headed = options.mode !== "stages";
-    browser = await chromium.launch({
-      channel: "chrome",
-      headless: !headed,
-      args: headed ? HEADED_WINDOW_ARGS : [],
-    });
-    const page = await openHarnessPage(browser, headed);
-    await gotoPreview(page, DEFAULT_PREVIEW_PORT);
-    if (!(await waitForApplicationBridge(page)))
-      return invalidResult(options.mode, "application bridge is unavailable");
-    const setup = await prepareLiveHarness(browser, page, options.mode);
-    if ("verdict" in setup) return setup;
-    const { cdp, environment, noiseFloor } = setup;
+    const { page, cdp, environment, noiseFloor } = session;
     let files: PerfFile[];
     try {
       files = await readReferenceFiles();
@@ -584,117 +444,8 @@ async function runLiveHarness(options: HarnessOptions): Promise<HarnessResult> {
     };
     return await runMeasuredScenarios(dependencies);
   } finally {
-    try {
-      if (browser) await browser.close();
-    } finally {
-      preview?.kill();
-    }
+    await session.close();
   }
-}
-
-interface LiveHarnessSetup {
-  readonly cdp: CDPSession;
-  readonly environment:
-    Awaited<ReturnType<typeof collectEnvironment>> | undefined;
-  readonly noiseFloor?: NoiseFloor;
-}
-
-async function prepareLiveHarness(
-  browser: Awaited<ReturnType<typeof chromium.launch>>,
-  page: Page,
-  mode: HarnessMode,
-): Promise<LiveHarnessSetup | HarnessResult> {
-  const cdp = await page.context().newCDPSession(page);
-  const environment =
-    mode === "full"
-      ? await collectEnvironment(browser, page, cdp, runSystemCommand)
-      : undefined;
-  const preflight = environment && evaluatePreflight(environment);
-  if (preflight && !preflight.valid)
-    return invalidResult(
-      mode,
-      `preflight failed: ${preflight.reasons.join("; ")}`,
-      environment,
-    );
-  if (mode !== "full") return { cdp, environment };
-  const measuredNoiseFloor = await measureNoiseFloor({
-    page,
-    cdp,
-    durationMs: 60_000,
-    recordTrace,
-    classifyTrace: classifyNoiseFloor,
-  });
-  if ("valid" in measuredNoiseFloor)
-    return invalidResult(
-      mode,
-      `noise floor measurement invalid: ${measuredNoiseFloor.reason}${measuredNoiseFloor.detail ? `: ${measuredNoiseFloor.detail}` : ""}`,
-      environment,
-    );
-  if (!evaluateNoiseFloor(measuredNoiseFloor).valid)
-    return invalidResult(
-      mode,
-      "noise floor exceeds the reference threshold",
-      environment,
-      measuredNoiseFloor,
-    );
-  return { cdp, environment, noiseFloor: measuredNoiseFloor };
-}
-
-export function previewArguments(port: number): string[] {
-  return [
-    "vite",
-    "preview",
-    "--host",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--strictPort",
-  ];
-}
-
-export function previewUrl(port: number): string {
-  return `http://127.0.0.1:${String(port)}`;
-}
-
-async function gotoPreview(page: Page, port: number): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    try {
-      await page.goto(previewUrl(port));
-      return;
-    } catch (error: unknown) {
-      if (attempt === 19) throw error;
-      await new Promise<void>((resolve) => setTimeout(resolve, 100));
-    }
-  }
-}
-
-async function loadBaseline(): Promise<Baseline | undefined> {
-  try {
-    const raw = JSON.parse(await readFile("perf/baseline.json", "utf8")) as {
-      scenarios?: unknown;
-    };
-    if (!Array.isArray(raw.scenarios)) return raw as Baseline;
-    const scenarios: Record<string, { p99: number | "unavailable" }> = {};
-    for (const scenario of raw.scenarios) {
-      if (!isRecord(scenario) || typeof scenario.scenario !== "string")
-        continue;
-      const worstRun = isRecord(scenario.worstRun)
-        ? scenario.worstRun
-        : undefined;
-      const metrics =
-        worstRun && isRecord(worstRun.metrics) ? worstRun.metrics : undefined;
-      scenarios[scenario.scenario] = { p99: statistic(metrics?.p99) };
-    }
-    return { scenarios };
-  } catch {
-    return undefined;
-  }
-}
-
-function statistic(value: unknown): number | "unavailable" {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : "unavailable";
 }
 
 function filteredScenarios(options: HarnessOptions): readonly Scenario[] {
@@ -763,24 +514,4 @@ function errorCode(error: unknown): string | undefined {
     return undefined;
   const code = (error as { code?: unknown }).code;
   return typeof code === "string" ? code : undefined;
-}
-
-async function runSystemCommand(
-  command: string,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  try {
-    const result = await execFileAsync("sh", ["-lc", command]);
-    return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
-  } catch (error: unknown) {
-    const failure = error as {
-      stdout?: string;
-      stderr?: string;
-      code?: number;
-    };
-    return {
-      stdout: failure.stdout ?? "",
-      stderr: failure.stderr ?? "",
-      exitCode: failure.code ?? 1,
-    };
-  }
 }

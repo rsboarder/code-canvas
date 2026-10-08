@@ -1,6 +1,7 @@
 interface FrameLogEntry {
   readonly tick: number;
   readonly timeMs: number;
+  readonly textWeight: number;
   readonly missingTile: boolean;
   readonly drawnTileCount: number;
   readonly drawnLabelTileCount: number;
@@ -19,6 +20,7 @@ interface FrameLogEntry {
 }
 
 interface FrameLogMetrics {
+  readonly textWeight: number;
   readonly missingTile: boolean;
   readonly drawnTileCount: number;
   readonly drawnLabelTileCount: number;
@@ -44,6 +46,7 @@ const CAPACITY = 512;
 export class FrameLog {
   private readonly tick = new Float64Array(CAPACITY);
   private readonly timeMs = new Float64Array(CAPACITY);
+  private readonly textWeight = new Float32Array(CAPACITY);
   private readonly missingTile = new Uint8Array(CAPACITY);
   private readonly drawnTileCount = new Uint16Array(CAPACITY);
   private readonly drawnLabelTileCount = new Uint16Array(CAPACITY);
@@ -68,6 +71,7 @@ export class FrameLog {
     this.tick[index] = this.nextTick;
     this.timeMs[index] = performance.now();
     this.nextTick += 1;
+    this.textWeight[index] = metrics.textWeight;
     this.missingTile[index] = metrics.missingTile ? 1 : 0;
     this.drawnTileCount[index] = metrics.drawnTileCount;
     this.drawnLabelTileCount[index] = metrics.drawnLabelTileCount;
@@ -96,6 +100,7 @@ export class FrameLog {
       entries.push({
         tick: this.tick[index] ?? 0,
         timeMs: this.timeMs[index] ?? 0,
+        textWeight: this.textWeightAt(index),
         missingTile: this.missingTile[index] === 1,
         drawnTileCount: this.drawnTileCount[index] ?? 0,
         drawnLabelTileCount: this.drawnLabelTileCount[index] ?? 0,
@@ -119,5 +124,9 @@ export class FrameLog {
 
   private drawnMinimapAt(index: number): number {
     return this.drawnMinimapCount[index] ?? 0;
+  }
+
+  private textWeightAt(index: number): number {
+    return this.textWeight[index] ?? 0;
   }
 }

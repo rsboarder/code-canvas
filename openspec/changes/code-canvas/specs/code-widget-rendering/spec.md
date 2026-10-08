@@ -31,7 +31,7 @@ The system SHALL choose the widget's representation based on the on-screen size 
 - **Text**: the code line is at least the readability threshold — the actual text is shown with highlighting.
 - **Minimap**: the code line is below the threshold — instead of characters, colored bars are shown that mirror each line's length, indentation, and token colors, with the file name overlaid in a large font readable on screen.
 Because the on-screen size of a line is the same for every widget, all widgets SHALL show the same detail level at any moment.
-Switching SHALL happen within a single frame, with no empty frames and no jump in the widget's geometry. The threshold for switching to "Minimap" when zooming out and the threshold for returning to "Text" when zooming in SHALL differ (hysteresis), so the widget does not flip back and forth when zooming near the threshold.
+Switching SHALL start within a single frame and complete as a crossfade of at most 150 ms, in which the outgoing representation fades out while the incoming one fades in, with no empty frames and no jump in the widget's geometry. The threshold for switching to "Minimap" when zooming out and the threshold for returning to "Text" when zooming in SHALL differ (hysteresis), so the widget does not flip back and forth when zooming near the threshold.
 
 #### Scenario: Zooming out to the minimap
 - **WHEN** the user decreases the zoom level so that a code line drops below the threshold
@@ -43,7 +43,7 @@ Switching SHALL happen within a single frame, with no empty frames and no jump i
 
 #### Scenario: Transition without flicker
 - **WHEN** the user smoothly zooms through the threshold in both directions
-- **THEN** in no frame is the widget empty, and in each frame the widget shows exactly one representation
+- **THEN** in no frame is the widget empty, and both representations are shown together only during the crossfade
 
 #### Scenario: Oscillation near the threshold
 - **WHEN** the user makes small zoom gestures back and forth within the hysteresis band

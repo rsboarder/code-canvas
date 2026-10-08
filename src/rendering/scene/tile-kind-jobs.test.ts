@@ -10,16 +10,6 @@ import {
 } from "./widget-tile-set";
 import { writeTileKindJob, type TileContentSource } from "./tile-kind-jobs";
 
-class FakePool {
-  release(): void {
-    return;
-  }
-
-  isPinned(): boolean {
-    return false;
-  }
-}
-
 const sourceRecord: TileRecordSource = {
   fileId: "file-a",
   filePath: "src/a.ts",
@@ -88,7 +78,7 @@ function newJob() {
 }
 
 function recordFor(kind: number): { records: TileRecords; record: number } {
-  const records = new TileRecords(new FakePool(), 4);
+  const records = new TileRecords(4);
   records.setContentSource(sourceRecord, 1);
   records.setHeaderHeight(24);
   const record = records.ensureRecord(kind, 1, 2, 3);

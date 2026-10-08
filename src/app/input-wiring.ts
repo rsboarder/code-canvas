@@ -1,44 +1,14 @@
-import type { BoardService } from "../board";
-import type { EditingTransition } from "../editing";
-import {
-  type FrameIntents,
-  GestureTargeting,
-  type WheelInput,
-} from "../interaction/gesture-targeting";
-import type { FrameLoop, WebGlRenderer } from "../rendering";
-import type { GesturePhase } from "../shared/frame";
-import { syncDetailLevel } from "./detail-level-sync";
-
-const CAMERA_CHANGED = 1;
-const WIDGET_CHANGED = 2;
-const gesturePhase: GesturePhase = {
-  gestureInProgress: false,
-  zoomGestureActive: false,
-  zoomFocusX: 0,
-  zoomFocusY: 0,
-  zoomingOut: false,
-  gestureEnded: false,
-  endedGestureWasZoom: false,
-  detailIsMinimap: false,
-  zoomingIn: false,
-  textThresholdZoom: 0,
-  cameraScale: 1,
-};
+import { GestureTargeting, type WheelInput } from "../interaction";
+import type { FrameLoop } from "../rendering";
 
 interface InputWiringOptions {
   readonly canvas: HTMLCanvasElement;
   readonly editorContainer: HTMLElement;
-  readonly board: BoardService;
   readonly targeting: GestureTargeting;
-  readonly getEditing: () => EditingTransition | undefined;
-  readonly getRenderer: () => WebGlRenderer | undefined;
   readonly getFrameLoop: () => FrameLoop | undefined;
-  readonly updateWidgetBodyRect: () => void;
-  readonly toggleMetricsOverlay: () => void;
 }
 
 interface InputWiring {
-  readonly applyInput: () => void;
   readonly wire: () => void;
 }
 
@@ -65,9 +35,6 @@ export function createInputWiring(options: InputWiringOptions): InputWiring {
     preventDefault: () => forwardedEditorWheel?.preventDefault(),
   };
   return {
-    applyInput: () => {
-      applyPendingInput(options);
-    },
     wire: () => {
       wireCanvasInput(options);
       wireKeyboardInput(options);
@@ -83,136 +50,6 @@ export function createInputWiring(options: InputWiringOptions): InputWiring {
       );
     },
   };
-}
-
-function applyPendingInput(options: InputWiringOptions): void {
-  const frameLoop = options.getFrameLoop();
-  const renderer = options.getRenderer();
-  if (!frameLoop || !renderer) return;
-  const editing = options.getEditing();
-  if (editing?.isExitHeld) {
-    keepGestureAlive(options.targeting, frameLoop);
-    return;
-  }
-  if (endActiveEditing(options, editing, frameLoop)) return;
-  const intents = options.targeting.takeIntents(performance.now());
-  if (intents.toggleMetricsOverlay) options.toggleMetricsOverlay();
-  applyIntents(options, frameLoop, renderer, intents);
-}
-
-function endActiveEditing(
-  options: InputWiringOptions,
-  editing: EditingTransition | undefined,
-  frameLoop: FrameLoop,
-): boolean {
-  const request = options.targeting.endEditingRequest;
-  if (request === undefined || !editing?.isEditing) return false;
-  const gesture = options.targeting.endEditingGesture;
-  editing.end(request, gesture ? { kind: gesture } : undefined);
-  if (!editing.isExitHeld) return false;
-  keepGestureAlive(options.targeting, frameLoop);
-  return true;
-}
-
-function applyIntents(
-  options: InputWiringOptions,
-  frameLoop: FrameLoop,
-  renderer: WebGlRenderer,
-  intents: FrameIntents,
-): void {
-  const devicePixelRatio = window.devicePixelRatio || 1;
-  gesturePhase.detailIsMinimap = options.board.detailLevel === "minimap";
-  gesturePhase.textThresholdZoom =
-    options.board.textThresholdZoom(devicePixelRatio);
-  gesturePhase.zoomingIn = intents.zoomFactor > 1;
-  const changes = applyBoardIntents(options, intents);
-  if (changes !== 0) options.updateWidgetBodyRect();
-  syncDetailLevel(options.board, renderer, options.canvas);
-  frameLoop.setGestureInProgress(intents.gestureInProgress);
-  gesturePhase.gestureInProgress = intents.gestureInProgress;
-  gesturePhase.zoomGestureActive = intents.zoomGestureActive;
-  gesturePhase.zoomFocusX = intents.zoomFocusX;
-  gesturePhase.zoomFocusY = intents.zoomFocusY;
-  gesturePhase.zoomingOut = intents.zoomingOut;
-  gesturePhase.gestureEnded = intents.gestureEnded;
-  gesturePhase.endedGestureWasZoom = intents.endedGestureWasZoom;
-  gesturePhase.cameraScale = options.board.camera.scale;
-  renderer.setGesturePhase(gesturePhase);
-}
-
-function applyBoardIntents(
-  options: InputWiringOptions,
-  intents: FrameIntents,
-): number {
-  let changes = 0;
-  if (intents.bringToFrontId !== undefined) {
-    options.board.bringToFront(intents.bringToFrontId);
-  }
-  if (intents.moveWidgetId !== undefined) {
-    options.board.moveWidget(
-      intents.moveWidgetId,
-      intents.moveX,
-      intents.moveY,
-    );
-    changes |= WIDGET_CHANGED;
-  }
-  if (intents.resizeWidgetId !== undefined) {
-    options.board.resizeWidget(
-      intents.resizeWidgetId,
-      intents.resizeWidth,
-      intents.resizeHeight,
-    );
-    changes |= WIDGET_CHANGED;
-  }
-  changes |= applyCameraIntents(options, intents);
-  if (intents.scrollWidgetId !== undefined && intents.scrollDeltaY !== 0) {
-    options.board.scrollWidget(intents.scrollWidgetId, intents.scrollDeltaY);
-  }
-  return changes;
-}
-
-function applyCameraIntents(
-  options: InputWiringOptions,
-  intents: FrameIntents,
-): number {
-  let changes = 0;
-  if (intents.panX || intents.panY) {
-    options.board.pan(intents.panX, intents.panY);
-    changes |= CAMERA_CHANGED;
-  }
-  if (intents.zoomFactor !== 1) {
-    options.board.zoomAt(intents.zoomX, intents.zoomY, intents.zoomFactor);
-    changes |= CAMERA_CHANGED;
-  }
-  if (intents.zoomToWidgetId !== undefined) {
-    const viewportWidth = options.canvas.clientWidth || window.innerWidth;
-    const viewportHeight = options.canvas.clientHeight || window.innerHeight;
-    options.board.zoomToWidget(
-      intents.zoomToWidgetId,
-      viewportWidth,
-      viewportHeight,
-    );
-    changes |= CAMERA_CHANGED;
-  }
-  if (intents.fitAll || intents.zoomTo100) {
-    const viewportWidth = options.canvas.clientWidth || window.innerWidth;
-    const viewportHeight = options.canvas.clientHeight || window.innerHeight;
-    if (intents.fitAll) {
-      options.board.fitAll(viewportWidth, viewportHeight);
-    }
-    if (intents.zoomTo100) {
-      options.board.zoomTo100(viewportWidth, viewportHeight);
-    }
-    changes |= CAMERA_CHANGED;
-  }
-  return changes;
-}
-
-function keepGestureAlive(
-  targeting: GestureTargeting,
-  frameLoop: FrameLoop,
-): void {
-  frameLoop.setGestureInProgress(targeting.gestureInProgress);
 }
 
 function wireCanvasInput(options: InputWiringOptions): void {

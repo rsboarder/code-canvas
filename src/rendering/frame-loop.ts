@@ -12,6 +12,16 @@ export interface FrameMetrics {
   tileMemoryBytes: number;
   missingTile: boolean;
   timeToSharpMs: number;
+  textWeight?: number;
+  drawnTileCount?: number;
+  drawnFallbackTileCount?: number;
+}
+
+interface TileMetrics {
+  readonly capacity: number;
+  readonly inUse: number;
+  readonly inFlight: number;
+  readonly posted: number;
 }
 
 export class FrameLoop {
@@ -27,7 +37,16 @@ export class FrameLoop {
     detailLevel: FrameSample["detailLevel"];
     textSwitchPending: boolean;
     visibleWidgetCount: FrameSample["visibleWidgetCount"];
+    totalWidgetCount: FrameSample["totalWidgetCount"];
+    cameraZoom: FrameSample["cameraZoom"];
     residencyBacklogDepth: FrameSample["residencyBacklogDepth"];
+    textWeight: FrameSample["textWeight"];
+    drawnTileCount: FrameSample["drawnTileCount"];
+    drawnFallbackTileCount: FrameSample["drawnFallbackTileCount"];
+    tilePoolSlotsInUse: FrameSample["tilePoolSlotsInUse"];
+    tilePoolCapacity: FrameSample["tilePoolCapacity"];
+    rasterJobsInFlight: FrameSample["rasterJobsInFlight"];
+    rasterJobsPostedTotal: FrameSample["rasterJobsPostedTotal"];
   } & FrameMetrics = {
     frameStartTime: 0,
     afterIdle: false,
@@ -35,10 +54,19 @@ export class FrameLoop {
     detailLevel: undefined,
     textSwitchPending: false,
     visibleWidgetCount: Number.NaN,
+    totalWidgetCount: Number.NaN,
+    cameraZoom: Number.NaN,
     residencyBacklogDepth: Number.NaN,
     tileMemoryBytes: Number.NaN,
     missingTile: false,
     timeToSharpMs: Number.NaN,
+    textWeight: Number.NaN,
+    drawnTileCount: Number.NaN,
+    drawnFallbackTileCount: Number.NaN,
+    tilePoolSlotsInUse: Number.NaN,
+    tilePoolCapacity: Number.NaN,
+    rasterJobsInFlight: Number.NaN,
+    rasterJobsPostedTotal: Number.NaN,
   };
   private readonly onAnimationFrame = (): void => {
     this.frameRequested = false;
@@ -50,10 +78,19 @@ export class FrameLoop {
     this.sample.detailLevel = undefined;
     this.sample.textSwitchPending = false;
     this.sample.visibleWidgetCount = Number.NaN;
+    this.sample.totalWidgetCount = Number.NaN;
+    this.sample.cameraZoom = Number.NaN;
     this.sample.residencyBacklogDepth = Number.NaN;
     this.sample.tileMemoryBytes = Number.NaN;
     this.sample.missingTile = false;
     this.sample.timeToSharpMs = Number.NaN;
+    this.sample.textWeight = Number.NaN;
+    this.sample.drawnTileCount = Number.NaN;
+    this.sample.drawnFallbackTileCount = Number.NaN;
+    this.sample.tilePoolSlotsInUse = Number.NaN;
+    this.sample.tilePoolCapacity = Number.NaN;
+    this.sample.rasterJobsInFlight = Number.NaN;
+    this.sample.rasterJobsPostedTotal = Number.NaN;
     let stageNeedsAnotherTick = false;
     for (let index = 0; index < this.stages.length; index += 1) {
       const stage = this.stages[index];
@@ -87,10 +124,19 @@ export class FrameLoop {
 
   // Called by a stage's own `run()`, synchronously within the current tick,
   // before `sampleSink` fires at the end of `onAnimationFrame`.
-  setFrameMetrics(metrics: FrameMetrics): void {
+  setFrameMetrics(metrics: FrameMetrics, tileMetrics?: TileMetrics): void {
     this.sample.tileMemoryBytes = metrics.tileMemoryBytes;
     this.sample.missingTile = metrics.missingTile;
     this.sample.timeToSharpMs = metrics.timeToSharpMs;
+    this.sample.textWeight = metrics.textWeight ?? Number.NaN;
+    this.sample.drawnTileCount = metrics.drawnTileCount ?? Number.NaN;
+    this.sample.drawnFallbackTileCount =
+      metrics.drawnFallbackTileCount ?? Number.NaN;
+    if (!tileMetrics) return;
+    this.sample.tilePoolCapacity = tileMetrics.capacity;
+    this.sample.tilePoolSlotsInUse = tileMetrics.inUse;
+    this.sample.rasterJobsInFlight = tileMetrics.inFlight;
+    this.sample.rasterJobsPostedTotal = tileMetrics.posted;
   }
 
   setSampleState(
@@ -103,6 +149,11 @@ export class FrameLoop {
     this.sample.textSwitchPending = textSwitchPending;
     this.sample.visibleWidgetCount = visibleWidgetCount;
     this.sample.residencyBacklogDepth = residencyBacklogDepth;
+  }
+
+  setBoardState(totalWidgetCount: number, cameraZoom: number): void {
+    this.sample.totalWidgetCount = totalWidgetCount;
+    this.sample.cameraZoom = cameraZoom;
   }
 
   invalidate(): void {

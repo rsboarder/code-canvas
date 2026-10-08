@@ -39,7 +39,7 @@ export class BackgroundPass {
   private readonly headerColor;
   private readonly frameColor;
   private readonly scrollThumbColor;
-  private readonly detailLevel;
+  private readonly contentAlpha;
   private readonly bodyTop;
   private readonly bodyTopValue;
   private readonly gutterWidth;
@@ -86,7 +86,7 @@ export class BackgroundPass {
       this.program,
       "scrollThumbColor",
     );
-    this.detailLevel = gl.getUniformLocation(this.program, "detailLevel");
+    this.contentAlpha = gl.getUniformLocation(this.program, "contentAlpha");
     this.bodyTop = gl.getUniformLocation(this.program, "bodyTop");
     this.gutterWidth = gl.getUniformLocation(this.program, "gutterWidth");
     this.minimumThumbHeight = gl.getUniformLocation(
@@ -104,7 +104,7 @@ export class BackgroundPass {
     camera: CameraView,
     table: WidgetTable,
     viewport: Viewport,
-    detailLevel: number,
+    contentAlpha: number,
   ): void {
     this.gl.useProgram(this.program);
     this.gl.uniform2f(this.resolution, viewport.width, viewport.height);
@@ -114,7 +114,7 @@ export class BackgroundPass {
     this.gl.uniform1i(this.rowCount, table.rowCount);
     const [red, green, blue] = this.backgroundRgb;
     this.gl.uniform4f(this.backgroundColor, red, green, blue, 1);
-    this.gl.uniform1f(this.detailLevel, detailLevel);
+    this.gl.uniform1f(this.contentAlpha, contentAlpha);
     this.gl.uniform1f(this.bodyTop, this.bodyTopValue);
     this.gl.uniform1f(this.gutterWidth, WIDGET_SCROLL_GUTTER_WIDTH);
     this.gl.uniform1f(this.minimumThumbHeight, MINIMUM_SCROLL_THUMB_HEIGHT);

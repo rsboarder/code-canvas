@@ -4,7 +4,12 @@ import type {
   RasterJob,
 } from "../text/raster-job";
 import { encodeRasterCells } from "../text/raster-job";
-import { HEADER_KIND, LABEL_KIND } from "./widget-tile-set";
+import {
+  HEADER_KIND,
+  LABEL_KIND,
+  type TileRecordView,
+  TileRecords,
+} from "./widget-tile-set/tile-records";
 import { TILE_DEVICE_SIZE, tileContentSize } from "./tile-plan";
 import { TILE_CELL_HEIGHT } from "./tile-pool";
 
@@ -53,26 +58,36 @@ type WritableRasterJob = {
   -readonly [Key in keyof RasterJob]: RasterJob[Key];
 };
 
-export interface TileKindRecordReader {
-  recordKind(record: number): number;
-  recordRasterScale(record: number): number;
-  recordColumn(record: number): number;
-  recordRow(record: number): number;
-  recordWidth(record: number): number;
-  recordHeight(record: number): number;
-}
+const RECORD_VIEW: TileRecordView = {
+  key: undefined,
+  active: false,
+  ready: false,
+  pending: false,
+  kind: 0,
+  rasterScale: 1,
+  epoch: 0,
+  contentVersion: -1,
+  column: 0,
+  row: 0,
+  localX: 0,
+  localY: 0,
+  width: 0,
+  height: 0,
+  highlighted: false,
+};
 
 export function writeTileKindJob(
   source: TileContentSource,
-  records: TileKindRecordReader,
+  records: TileRecords,
   record: number,
   job: WritableRasterJob,
 ): boolean {
-  const kind = records.recordKind(record);
+  records.read(record, RECORD_VIEW);
+  const kind = RECORD_VIEW.kind;
   if (kind === LABEL_KIND) return writeLabelJob(source, records, record, job);
-  const rasterScale = records.recordRasterScale(record);
-  const column = records.recordColumn(record);
-  const row = records.recordRow(record);
+  const rasterScale = RECORD_VIEW.rasterScale;
+  const column = RECORD_VIEW.column;
+  const row = RECORD_VIEW.row;
   job.backgroundColor =
     kind === HEADER_KIND
       ? source.headerBackgroundColor
@@ -92,26 +107,25 @@ export function writeTileKindJob(
   return true;
 }
 
-export function usesCell(
-  records: TileKindRecordReader,
-  record: number,
-): boolean {
-  const kind = records.recordKind(record);
+export function usesCell(records: TileRecords, record: number): boolean {
+  records.read(record, RECORD_VIEW);
+  const kind = RECORD_VIEW.kind;
   if (kind !== HEADER_KIND && kind !== LABEL_KIND) return false;
-  const rasterScale = records.recordRasterScale(record);
+  const rasterScale = RECORD_VIEW.rasterScale;
   return (
-    records.recordHeight(record) * rasterScale <= TILE_CELL_HEIGHT - 1 &&
-    records.recordWidth(record) * rasterScale <= TILE_DEVICE_SIZE
+    RECORD_VIEW.height * rasterScale <= TILE_CELL_HEIGHT - 1 &&
+    RECORD_VIEW.width * rasterScale <= TILE_DEVICE_SIZE
   );
 }
 
 function writeLabelJob(
   source: TileContentSource,
-  records: TileKindRecordReader,
+  records: TileRecords,
   record: number,
   job: WritableRasterJob,
 ): boolean {
-  const rasterScale = records.recordRasterScale(record);
+  records.read(record, RECORD_VIEW);
+  const rasterScale = RECORD_VIEW.rasterScale;
   const labelJob = source.label?.jobFor(rasterScale);
   if (!labelJob) return false;
   job.backgroundColor = labelJob.backgroundColor;

@@ -8,7 +8,11 @@ export type {
   TokenizedLines,
   Tokenizer,
 } from "./application/document-residency/index";
-export { createLineGeometry, LineLayout } from "./domain/line-layout";
+export {
+  createLineGeometry,
+  isWhitespaceCluster,
+  LineLayout,
+} from "./domain/line-layout";
 export {
   LINE_NUMBER_GAP_CSS,
   LineNumberGutter,

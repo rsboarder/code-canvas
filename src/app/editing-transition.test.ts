@@ -10,13 +10,13 @@ import {
   LineNumberGutter,
   type Tokenizer,
 } from "../code-view/index";
-import {
-  EditingTransition,
-  type EditingEndReason,
-  type PendingGesture,
-} from "../editing/index";
+import { EditingTransition, type EditingGpuView } from "../editing/index";
 import { FakeEditorHost } from "../editing/infrastructure/fake-editor-host";
-import { sourceFileId, workspaceFolderId } from "../shared/domain";
+import {
+  sourceFileId,
+  type SourceFileId,
+  workspaceFolderId,
+} from "../shared/domain";
 import { createEventBus } from "../shared/events";
 import {
   WorkspaceService,
@@ -28,6 +28,14 @@ import { InMemoryDirectory } from "../workspace/infrastructure/in-memory-directo
 const folder = { id: workspaceFolderId("editing-tests"), name: "editing" };
 const fileId = sourceFileId("file.ts");
 const gutter = new LineNumberGutter(8.4);
+const bodyTop = 42;
+const lineMetrics = {
+  narrowAdvance: 8.4,
+  tabSize: 4,
+  baseline: 16,
+  lineHeight: 20,
+  advanceFor: () => 8.4,
+};
 const metrics: BoardMetrics = {
   baseLineHeight: 20,
   headerHeight: 24,
@@ -44,11 +52,39 @@ interface TestEnvironment {
   readonly changed: { version: number; text: string }[];
   readonly directory: InMemoryDirectory;
   readonly editor: FakeEditorHost;
+  readonly gpuView: FakeEditingGpuView;
   readonly residency: DocumentResidency;
   readonly transition: EditingTransition;
   readonly workspace: WorkspaceService;
   setTilesCurrent(current: boolean): void;
   reportRasterError(): void;
+}
+
+class FakeEditingGpuView implements EditingGpuView {
+  hiddenBody: SourceFileId | undefined = undefined;
+  priorityFile: SourceFileId | undefined = undefined;
+  private tilesCurrent = true;
+  private rasterError = false;
+
+  setHiddenBody(fileId: SourceFileId | undefined): void {
+    this.hiddenBody = fileId;
+  }
+
+  setPriorityFile(fileId: SourceFileId | undefined): void {
+    this.priorityFile = fileId;
+  }
+
+  exitViewCovered(): boolean {
+    return this.tilesCurrent || this.rasterError;
+  }
+
+  setTilesCurrent(current: boolean): void {
+    this.tilesCurrent = current;
+  }
+
+  setRasterError(): void {
+    this.rasterError = true;
+  }
 }
 
 function bytes(text: string): Uint8Array {
@@ -94,13 +130,7 @@ async function setup(
   };
   const residency = new DocumentResidency({
     tokenizer,
-    lineMetrics: {
-      narrowAdvance: 8.4,
-      tabSize: 4,
-      baseline: 16,
-      lineHeight: 20,
-      advanceFor: () => 8.4,
-    },
+    lineMetrics,
   });
   events.subscribe("FileContentChanged", (event) => {
     residency.contentChanged(event.fileId, event.contentVersion, event.text);
@@ -118,26 +148,20 @@ async function setup(
   });
 
   const editor = new FakeEditorHost();
-  let tilesCurrent = true;
-  let rasterError = false;
+  const gpuView = new FakeEditingGpuView();
   const transition = new EditingTransition({
     board,
     workspace,
     editor,
     residency,
-    lineMetrics: {
-      narrowAdvance: 8.4,
-      tabSize: 4,
-      baseline: 16,
-      lineHeight: 20,
-      advanceFor: () => 8.4,
-    },
+    lineMetrics,
     gutter,
-    tilesCurrent: () => tilesCurrent || rasterError,
+    gpuView,
+    bodyTop,
     onOpened: () => undefined,
   });
   editor.onEscape(() => {
-    transition.end("escape");
+    transition.end();
   });
   return {
     board,
@@ -147,11 +171,12 @@ async function setup(
     residency,
     transition,
     workspace,
+    gpuView,
     setTilesCurrent: (current) => {
-      tilesCurrent = current;
+      gpuView.setTilesCurrent(current);
     },
     reportRasterError: () => {
-      rasterError = true;
+      gpuView.setRasterError();
     },
   };
 }
@@ -161,15 +186,12 @@ async function openEditor(environment: TestEnvironment): Promise<void> {
   await flush();
 }
 
-async function assertExit(
-  reason: EditingEndReason,
-  pendingGesture?: PendingGesture,
-): Promise<void> {
+async function assertExit(): Promise<void> {
   const environment = await setup();
   await openEditor(environment);
-  environment.transition.takeFrameSwap();
-  expect(environment.transition.end(reason, pendingGesture)).toBe(true);
-  expect(environment.transition.takeFrameSwap()?.direction).toBe("exit");
+  environment.transition.applyFrameSwap();
+  expect(environment.transition.end()).toBe(true);
+  expect(environment.transition.applyFrameSwap().direction).toBe("exit");
 }
 
 describe("EditingTransition", () => {
@@ -177,27 +199,26 @@ describe("EditingTransition", () => {
     const environment = await setup();
     await openEditor(environment);
     expect(environment.editor.visible).toBe(false);
-    expect(environment.transition.takeFrameSwap()?.direction).toBe("enter");
+    expect(environment.transition.applyFrameSwap().direction).toBe("enter");
     expect(environment.editor.visible).toBe(true);
-    expect(environment.transition.takeFrameSwap()).toBeUndefined();
+    expect(environment.gpuView.hiddenBody).toBe(fileId);
+    expect(environment.transition.applyFrameSwap().direction).toBeUndefined();
   });
-  it("saves edits and exits with the pending pan", async () => {
+  it("saves edits and exits after a pan", async () => {
     const environment = await setup();
     environment.residency.visibleRangesChanged(
       new Map([[fileId, [{ start: 0, end: 1 }]]]),
     );
     const initialChangeCount = environment.changed.length;
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.editor.setValue("const answer = 43;\n");
-    expect(environment.transition.end("pan", { kind: "pan", x: 8, y: 2 })).toBe(
-      true,
-    );
-    expect(environment.transition.takeFrameSwap()).toMatchObject({
+    expect(environment.transition.end()).toBe(true);
+    expect(environment.transition.applyFrameSwap()).toMatchObject({
       direction: "exit",
-      pendingGesture: { kind: "pan" },
     });
     expect(environment.editor.visible).toBe(false);
+    expect(environment.gpuView.hiddenBody).toBe(undefined);
     expect(environment.changed.slice(initialChangeCount)).toEqual([
       { version: 2, text: "const answer = 43;\n" },
     ]);
@@ -207,12 +228,12 @@ describe("EditingTransition", () => {
     const environment = await setup();
     environment.changed.length = 0;
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.setTilesCurrent(false);
-    expect(environment.transition.end("escape")).toBe(true);
-    expect(environment.transition.takeFrameSwap()).toBeUndefined();
+    expect(environment.transition.end()).toBe(true);
+    expect(environment.transition.applyFrameSwap().direction).toBeUndefined();
     environment.setTilesCurrent(true);
-    expect(environment.transition.takeFrameSwap()?.direction).toBe("exit");
+    expect(environment.transition.applyFrameSwap().direction).toBe("exit");
     expect(environment.editor.closeCount).toBe(1);
     expect(environment.changed).toEqual([]);
     expect(environment.transition.activeWidgetId).toBeUndefined();
@@ -232,48 +253,73 @@ describe("EditingTransition", () => {
 
     await openEditor(environment);
     expect(environment.editor.getScrollTop()).toBe(300);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
 
     environment.editor.setScrollTop(99999);
     environment.editor.setValue(text.replace("line1", "changed"));
     environment.setTilesCurrent(false);
-    expect(environment.transition.end("escape")).toBe(true);
+    expect(environment.transition.end()).toBe(true);
 
     const row = environment.board.readWidget(fileId, createWidgetRow());
     expect(row.contentScroll).toBe(row.maxContentScroll);
-    expect(environment.transition.takeFrameSwap()).toBeUndefined();
+    expect(environment.transition.applyFrameSwap().direction).toBeUndefined();
     environment.setTilesCurrent(true);
-    expect(environment.transition.takeFrameSwap()?.direction).toBe("exit");
+    expect(environment.transition.applyFrameSwap().direction).toBe("exit");
+  });
+});
+
+describe("EditingTransition placement", () => {
+  it("captures editor bounds once when entering editing", async () => {
+    const environment = await setup();
+    environment.board.setCamera(120, -80, 1.5);
+    await openEditor(environment);
+
+    const row = environment.board.readWidget(fileId, createWidgetRow());
+    expect(environment.editor.lastBounds).toEqual({
+      x: 120 + row.x * 1.5,
+      y: -80 + (row.y + bodyTop) * 1.5,
+      width: row.width,
+      height: row.height - bodyTop,
+    });
+    expect(environment.editor.lastZoom).toBe(1.5);
+
+    const bounds = environment.editor.lastBounds;
+    environment.board.setCamera(-40, 60, 0.75);
+    expect(environment.editor.lastBounds).toEqual(bounds);
+    expect(environment.editor.lastZoom).toBe(1.5);
   });
 });
 
 describe("EditingTransition exits", () => {
-  it("exits for escape", () => assertExit("escape"));
+  it("exits for escape", () => assertExit());
 
-  it("exits for outside", () => assertExit("outside"));
+  it("exits for outside", () => assertExit());
 
-  it("exits for pan", () => assertExit("pan", { kind: "pan", x: 8, y: 2 }));
+  it("exits for pan", () => assertExit());
 
-  it("exits for zoom", () =>
-    assertExit("zoom", { kind: "zoom", x: 20, y: 12 }));
+  it("exits for zoom", () => assertExit());
 
-  it("exits for another-widget", () => assertExit("another-widget"));
+  it("exits for another-widget", () => assertExit());
 
   it("holds an edited exit until the current tiles are ready", async () => {
     const environment = await setup();
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.editor.setValue("const answer = 43;\n");
     environment.setTilesCurrent(false);
-    environment.transition.end("escape");
+    environment.transition.end();
     expect(environment.transition.isExitHeld).toBe(true);
     expect(environment.editor.visible).toBe(true);
+    expect(environment.gpuView.hiddenBody).toBe(fileId);
     expect(environment.editor.readOnly).toBe(true);
     expect(environment.editor.isOpen).toBe(true);
-    expect(environment.transition.takeFrameSwap()).toBeUndefined();
+    expect(environment.transition.applyFrameSwap().direction).toBeUndefined();
+    expect(environment.gpuView.priorityFile).toBe(fileId);
     environment.setTilesCurrent(true);
-    expect(environment.transition.takeFrameSwap()?.direction).toBe("exit");
+    expect(environment.transition.applyFrameSwap().direction).toBe("exit");
     expect(environment.editor.visible).toBe(false);
+    expect(environment.gpuView.priorityFile).toBeUndefined();
+    expect(environment.gpuView.hiddenBody).toBeUndefined();
     expect(environment.editor.isOpen).toBe(false);
     expect(environment.editor.closeCount).toBe(1);
   });
@@ -281,13 +327,13 @@ describe("EditingTransition exits", () => {
   it("discards edits and exits once the current tiles are ready", async () => {
     const environment = await setup();
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.changed.length = 0;
     environment.editor.setValue("const answer = 43;\n");
 
     expect(environment.transition.discard()).toBe(true);
     expect(environment.changed).toEqual([]);
-    expect(environment.transition.takeFrameSwap()?.direction).toBe("exit");
+    expect(environment.transition.applyFrameSwap().direction).toBe("exit");
   });
 
   it("returns false when discarding without an active session", async () => {
@@ -299,22 +345,22 @@ describe("EditingTransition exits", () => {
   it("refuses to begin while an edited exit is held", async () => {
     const environment = await setup();
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.editor.setValue("const answer = 43;\n");
     environment.setTilesCurrent(false);
-    environment.transition.end("escape");
+    environment.transition.end();
     expect(environment.transition.begin(fileId, { x: 0, y: 0 })).toBe(false);
   });
 
   it("releases an edited exit when rendering reports a raster error", async () => {
     const environment = await setup();
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.editor.setValue("const answer = 43;\n");
     environment.setTilesCurrent(false);
-    environment.transition.end("escape");
+    environment.transition.end();
     environment.reportRasterError();
-    expect(environment.transition.takeFrameSwap()?.direction).toBe("exit");
+    expect(environment.transition.applyFrameSwap().direction).toBe("exit");
     expect(environment.editor.visible).toBe(false);
     expect(environment.editor.isOpen).toBe(false);
   });
@@ -330,7 +376,7 @@ describe("EditingTransition editor port", () => {
   it("routes Escape only after Monaco closes suggestions and search", async () => {
     const environment = await setup();
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.editor.suggestWidgetOpen = true;
     environment.editor.triggerEscape();
     expect(environment.transition.isEditing).toBe(true);
@@ -354,7 +400,7 @@ describe("EditingTransition editor port", () => {
     const environment = await setup();
     await openEditor(environment);
     environment.editor.setValue("changed");
-    expect(environment.transition.end("escape")).toBe(true);
+    expect(environment.transition.end()).toBe(true);
     expect(environment.changed[environment.changed.length - 1]).toEqual({
       version: 2,
       text: "changed",
@@ -391,7 +437,7 @@ describe("EditingTransition workspace reads", () => {
   it("cancels a pending read before it opens", async () => {
     const environment = await setup();
     expect(environment.transition.begin(fileId, { x: 0, y: 0 })).toBe(true);
-    expect(environment.transition.end("outside")).toBe(false);
+    expect(environment.transition.end()).toBe(false);
     await flush();
     expect(environment.editor.preparedCount).toBe(0);
     expect(environment.editor.openCount).toBe(0);
@@ -422,24 +468,24 @@ describe("EditingTransition workspace reads", () => {
   it("exits without publishing when opened without a change", async () => {
     const environment = await setup();
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.changed.length = 0;
-    expect(environment.transition.end("outside")).toBe(true);
+    expect(environment.transition.end()).toBe(true);
     expect(environment.changed).toEqual([]);
   });
 
   it("publishes one change and holds the edited exit until tiles are current", async () => {
     const environment = await setup();
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.changed.length = 0;
     environment.editor.setValue("changed");
     environment.setTilesCurrent(false);
-    expect(environment.transition.end("another-widget")).toBe(true);
+    expect(environment.transition.end()).toBe(true);
     expect(environment.changed).toEqual([{ version: 2, text: "changed" }]);
-    expect(environment.transition.takeFrameSwap()).toBeUndefined();
+    expect(environment.transition.applyFrameSwap().direction).toBeUndefined();
     environment.setTilesCurrent(true);
-    expect(environment.transition.takeFrameSwap()?.direction).toBe("exit");
+    expect(environment.transition.applyFrameSwap().direction).toBe("exit");
   });
 });
 
@@ -463,7 +509,7 @@ describe("EditingTransition autosave", () => {
   it("publishes when due and then has no autosave pending", async () => {
     const environment = await setup();
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.changed.length = 0;
     const clock = vi.spyOn(performance, "now").mockReturnValue(1000);
     environment.editor.setValue("const answer = 43;\n");
@@ -485,29 +531,29 @@ describe("EditingTransition autosave", () => {
   it("holds an exit after an autosave until its tiles are current", async () => {
     const environment = await setup();
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.editor.setValue("const answer = 43;\n");
     environment.transition.autosave(environment.transition.autosaveDueAt() + 1);
     environment.changed.length = 0;
     environment.setTilesCurrent(false);
 
-    expect(environment.transition.end("escape")).toBe(true);
+    expect(environment.transition.end()).toBe(true);
     expect(environment.changed).toEqual([]);
-    expect(environment.transition.takeFrameSwap()).toBeUndefined();
+    expect(environment.transition.applyFrameSwap().direction).toBeUndefined();
     environment.setTilesCurrent(true);
-    expect(environment.transition.takeFrameSwap()?.direction).toBe("exit");
+    expect(environment.transition.applyFrameSwap().direction).toBe("exit");
   });
 
   it("publishes edits made after an autosave at the exit", async () => {
     const environment = await setup();
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.changed.length = 0;
     environment.editor.setValue("const answer = 43;\n");
     environment.transition.autosave(environment.transition.autosaveDueAt() + 1);
     environment.editor.setValue("const answer = 44;\n");
 
-    expect(environment.transition.end("escape")).toBe(true);
+    expect(environment.transition.end()).toBe(true);
     expect(environment.changed).toEqual([
       { version: 2, text: "const answer = 43;\n" },
       { version: 3, text: "const answer = 44;\n" },
@@ -535,22 +581,22 @@ describe("EditingTransition switches widgets", () => {
     );
     const otherFileId = sourceFileId("other.ts");
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.editor.setValue("const answer = 43;\n");
     environment.setTilesCurrent(false);
-    expect(environment.transition.end("outside")).toBe(true);
+    expect(environment.transition.end()).toBe(true);
 
     expect(environment.transition.begin(otherFileId, { x: 12, y: 20 })).toBe(
       true,
     );
-    expect(environment.transition.takeFrameSwap()).toBeUndefined();
+    expect(environment.transition.applyFrameSwap().direction).toBeUndefined();
     environment.setTilesCurrent(true);
-    expect(environment.transition.takeFrameSwap()).toMatchObject({
+    expect(environment.transition.applyFrameSwap()).toMatchObject({
       direction: "exit",
       widgetId: fileId,
     });
     await flush();
-    expect(environment.transition.takeFrameSwap()).toMatchObject({
+    expect(environment.transition.applyFrameSwap()).toMatchObject({
       direction: "enter",
       widgetId: otherFileId,
     });
@@ -565,7 +611,7 @@ describe("EditingTransition switches widgets", () => {
     );
     const otherFileId = sourceFileId("other.ts");
     await openEditor(environment);
-    environment.transition.takeFrameSwap();
+    environment.transition.applyFrameSwap();
     environment.editor.setValue("const answer = 43;\n");
 
     expect(environment.transition.begin(otherFileId, { x: 12, y: 20 })).toBe(
@@ -575,12 +621,12 @@ describe("EditingTransition switches widgets", () => {
       version: 2,
       text: "const answer = 43;\n",
     });
-    expect(environment.transition.takeFrameSwap()).toMatchObject({
+    expect(environment.transition.applyFrameSwap()).toMatchObject({
       direction: "exit",
       widgetId: fileId,
     });
     await flush();
-    expect(environment.transition.takeFrameSwap()).toMatchObject({
+    expect(environment.transition.applyFrameSwap()).toMatchObject({
       direction: "enter",
       widgetId: otherFileId,
     });

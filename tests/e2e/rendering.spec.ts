@@ -26,6 +26,8 @@ interface Region {
 
 interface FrameLogEntry {
   readonly tick: number;
+  readonly timeMs: number;
+  readonly textWeight: number;
   readonly drawnTileCount: number;
   readonly drawnLabelTileCount: number;
   readonly drawnMinimapCount: number;
@@ -381,15 +383,11 @@ async function assertTransitionFrames(
   page: Page,
   firstTick: number,
 ): Promise<void> {
-  const entries = (await readFrameLog(page)).filter(
-    (entry) => entry.tick >= firstTick,
-  );
+  const allEntries = await readFrameLog(page);
+  const entries = allEntries.filter((entry) => entry.tick >= firstTick);
   const violations = entries.filter((entry) => {
     const content = entry.drawnTileCount - entry.drawnLabelTileCount;
-    return (
-      (content > 0 && entry.drawnMinimapCount > 0) ||
-      (content <= 0 && entry.drawnMinimapCount <= 0)
-    );
+    return content <= 0 && entry.drawnMinimapCount <= 0;
   });
   const details = [
     ...new Set(entries.map((entry) => entry.detailLevel)),
@@ -398,6 +396,52 @@ async function assertTransitionFrames(
     violations,
     `Transition representation violations=${JSON.stringify(violations)} entries=${String(entries.length)} ` +
       `firstTick=${String(firstTick)}`,
+  ).toHaveLength(0);
+  const bothDuringTransitionViolations = entries.filter((entry) => {
+    const content = entry.drawnTileCount - entry.drawnLabelTileCount;
+    const bothRepresentations = content > 0 && entry.drawnMinimapCount > 0;
+    const fading = entry.textWeight > 0 && entry.textWeight < 1;
+    return bothRepresentations && !fading;
+  });
+  expect(
+    bothDuringTransitionViolations,
+    `Both representations outside fade violations=${JSON.stringify(bothDuringTransitionViolations)} ` +
+      `entries=${String(entries.length)} firstTick=${String(firstTick)}`,
+  ).toHaveLength(0);
+  const fadeRunViolations: {
+    readonly first: FrameLogEntry;
+    readonly last: FrameLogEntry;
+    readonly before: FrameLogEntry | undefined;
+    readonly elapsedMs: number;
+  }[] = [];
+  let fadeRunStart = -1;
+  for (let index = 0; index <= entries.length; index += 1) {
+    const entry = entries[index];
+    const fading =
+      entry !== undefined && entry.textWeight > 0 && entry.textWeight < 1;
+    if (fading && fadeRunStart < 0) fadeRunStart = index;
+    if ((!fading || index === entries.length) && fadeRunStart >= 0) {
+      const first = entries[fadeRunStart];
+      const last = entries[index - 1];
+      if (!first || !last) throw new Error("Fade run entries are unavailable");
+      const firstIndex = allEntries.indexOf(first);
+      const before =
+        fadeRunStart > 0
+          ? entries[fadeRunStart - 1]
+          : allEntries[firstIndex - 1];
+      const elapsedMs = before
+        ? last.timeMs - before.timeMs
+        : Number.POSITIVE_INFINITY;
+      if (elapsedMs > 150 + 34) {
+        fadeRunViolations.push({ first, last, before, elapsedMs });
+      }
+      fadeRunStart = -1;
+    }
+  }
+  expect(
+    fadeRunViolations,
+    `Fade run duration violations=${JSON.stringify(fadeRunViolations)} ` +
+      `entries=${String(entries.length)} firstTick=${String(firstTick)}`,
   ).toHaveLength(0);
   expect(
     details,

@@ -1,4 +1,3 @@
-import { isWhitespaceCluster } from "../rendering/text/text-metrics";
 import type {
   CodeTextMetrics,
   TextMetricsProbe,
@@ -102,9 +101,7 @@ function cellColors(
     ? source.lineWindows.get(targetFileId)
     : undefined;
   return visibleCells(lineWindow, options.metrics).map((line) =>
-    line
-      .filter((cell) => !isWhitespaceCluster(cell.cluster))
-      .map(({ cluster, colorIndex }) => ({ cluster, colorIndex })),
+    line.map(({ cluster, colorIndex }) => ({ cluster, colorIndex })),
   );
 }
 

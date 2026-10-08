@@ -25,9 +25,10 @@ export interface TileInstance {
 export interface TileDrawContext {
   camera: CameraView;
   viewport: Viewport;
-  titleOnly: boolean;
   snapToDevicePixel: boolean;
   bodyTop: number;
+  contentAlpha: number;
+  labelAlpha: number;
 }
 
 // Replaces the glyph pass (design D6 "Text Tiles", "Tile pass"): one
@@ -38,11 +39,9 @@ export class TilePass {
   private readonly program: WebGLProgram;
   private readonly quadBuffer: WebGLBuffer;
   private readonly instanceBuffer: WebGLBuffer;
-  private readonly titleVao: WebGLVertexArrayObject;
   private readonly bodyVao: WebGLVertexArrayObject;
   private scratch: Float32Array;
   private instanceCount = 0;
-  private titleCount = 0;
   private readonly resolution;
   private readonly devicePixelRatio;
   private readonly cameraOffset;
@@ -53,6 +52,8 @@ export class TilePass {
   private readonly gutterWidth;
   private readonly slotUvScale;
   private readonly halfTexel;
+  private readonly contentAlpha;
+  private readonly labelAlpha;
   private readonly tableTexture: WebGLTexture;
 
   constructor(
@@ -68,7 +69,6 @@ export class TilePass {
     this.instanceBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, this.scratch.byteLength, gl.DYNAMIC_DRAW);
-    this.titleVao = gl.createVertexArray();
     this.bodyVao = gl.createVertexArray();
     this.resolution = gl.getUniformLocation(this.program, "resolution");
     this.cameraOffset = gl.getUniformLocation(this.program, "cameraOffset");
@@ -82,6 +82,8 @@ export class TilePass {
     this.gutterWidth = gl.getUniformLocation(this.program, "gutterWidth");
     this.slotUvScale = gl.getUniformLocation(this.program, "slotUvScale");
     this.halfTexel = gl.getUniformLocation(this.program, "halfTexel");
+    this.contentAlpha = gl.getUniformLocation(this.program, "contentAlpha");
+    this.labelAlpha = gl.getUniformLocation(this.program, "labelAlpha");
     gl.useProgram(this.program);
     gl.uniform1i(gl.getUniformLocation(this.program, "tiles"), 0);
     gl.uniform1i(this.widgetTable, 1);
@@ -91,14 +93,11 @@ export class TilePass {
     );
   }
 
-  // Called once per frame before pushing this tick's visible instances
-  // (title/label instances first, then body content instances) — Text draws
-  // both ranges, while Minimap selects the title range. The scratch buffer
-  // is reused every frame, never reallocated (AGENTS.md "no allocations per
-  // frame").
+  // Called once per frame before pushing this tick's visible instances.
+  // The scratch buffer is reused every frame, never reallocated (AGENTS.md
+  // "no allocations per frame").
   beginFrame(): void {
     this.instanceCount = 0;
-    this.titleCount = 0;
   }
 
   ensureInstanceCapacity(maxInstances: number): void {
@@ -129,12 +128,6 @@ export class TilePass {
     this.instanceCount += 1;
   }
 
-  // Marks the boundary between title/label instances and body content so
-  // Minimap detail can draw only the label overlay.
-  markTitleBoundary(): void {
-    this.titleCount = this.instanceCount;
-  }
-
   endFrame(): void {
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.instanceBuffer);
     this.gl.bufferSubData(
@@ -144,15 +137,20 @@ export class TilePass {
       0,
       this.instanceCount * TILE_INSTANCE_FLOATS,
     );
-    this.configureVao(this.titleVao, 0);
     this.configureVao(this.bodyVao, 0);
     this.gl.bindVertexArray(null);
   }
 
   draw(context: TileDrawContext): void {
-    const { camera, viewport, titleOnly, snapToDevicePixel, bodyTop } = context;
-    const drawTitleOnly = titleOnly;
-    const count = drawTitleOnly ? this.titleCount : this.instanceCount;
+    const {
+      camera,
+      viewport,
+      snapToDevicePixel,
+      bodyTop,
+      contentAlpha,
+      labelAlpha,
+    } = context;
+    const count = this.instanceCount;
     if (count === 0) return;
     this.gl.useProgram(this.program);
     this.gl.uniform2f(this.resolution, viewport.width, viewport.height);
@@ -162,6 +160,8 @@ export class TilePass {
     this.gl.uniform1f(this.snapToDevicePixel, snapToDevicePixel ? 1 : 0);
     this.gl.uniform1f(this.bodyTop, bodyTop);
     this.gl.uniform1f(this.gutterWidth, WIDGET_SCROLL_GUTTER_WIDTH);
+    this.gl.uniform1f(this.contentAlpha, contentAlpha);
+    this.gl.uniform1f(this.labelAlpha, labelAlpha);
     this.gl.uniform2f(
       this.slotUvScale,
       this.pool.slotUvScaleX,
@@ -175,7 +175,7 @@ export class TilePass {
     this.pool.bind(0);
     this.gl.activeTexture(this.gl.TEXTURE1);
     this.gl.bindTexture(this.gl.TEXTURE_2D, this.tableTexture);
-    this.gl.bindVertexArray(drawTitleOnly ? this.titleVao : this.bodyVao);
+    this.gl.bindVertexArray(this.bodyVao);
     this.gl.drawArraysInstanced(this.gl.TRIANGLE_STRIP, 0, 4, count);
     this.gl.bindVertexArray(null);
   }

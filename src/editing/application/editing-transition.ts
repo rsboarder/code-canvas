@@ -11,23 +11,15 @@ import {
 } from "../../code-view/index";
 import type { SourceFileId } from "../../shared/domain";
 import type { WorkspaceService } from "../../workspace/index";
-import {
-  EditingSession,
-  type EditingEndReason,
-} from "../domain/editing-session";
+import { EditingSession } from "../domain/editing-session";
 import { AutosavePolicy } from "../domain/autosave-policy";
+import type { EditingGpuView } from "./editing-gpu-view";
 import type { EditorHost, EditorOpenOptions } from "./editor-host";
 
-export interface PendingGesture {
-  readonly kind: "pan" | "zoom";
-  readonly x?: number;
-  readonly y?: number;
-}
-
-export interface FrameSwap {
-  readonly direction: "enter" | "exit";
-  readonly widgetId: SourceFileId;
-  readonly pendingGesture?: PendingGesture;
+export interface EditingSwapResult {
+  readonly direction: "enter" | "exit" | undefined;
+  readonly widgetId: SourceFileId | undefined;
+  readonly needsAnotherTick: boolean;
 }
 
 interface EditingTransitionOptions {
@@ -38,13 +30,11 @@ interface EditingTransitionOptions {
     Pick<BoardService, "setContentScroll">;
   readonly workspace: Pick<WorkspaceService, "readForEditing" | "applyDraft">;
   readonly editor: EditorHost;
+  readonly gpuView: EditingGpuView;
   readonly residency: DocumentResidency;
   readonly lineMetrics: LineMetrics;
   readonly gutter: LineNumberGutter;
-  readonly tilesCurrent: (
-    widgetId: SourceFileId,
-    contentVersion: number,
-  ) => boolean;
+  readonly bodyTop: number;
   readonly onOpened: () => void;
 }
 
@@ -55,7 +45,8 @@ function editorLanguage(path: string): EditorOpenOptions["language"] {
 export class EditingTransition {
   private readonly session = new EditingSession();
   private readonly autosavePolicy = new AutosavePolicy();
-  private pendingSwap: FrameSwap | undefined;
+  private pendingSwap:
+    { direction: "enter" | "exit"; widgetId: SourceFileId } | undefined;
   private pendingExitVersion: number | undefined;
   private latestPublishedVersion: number | undefined;
   private pendingRead: { cancelled: boolean } | undefined;
@@ -63,6 +54,11 @@ export class EditingTransition {
   private pendingBeginX = 0;
   private pendingBeginY = 0;
   private readonly widgetRow = createWidgetRow();
+  private readonly frameResult = {
+    direction: undefined as "enter" | "exit" | undefined,
+    widgetId: undefined as SourceFileId | undefined,
+    needsAnotherTick: false,
+  };
 
   constructor(private readonly options: EditingTransitionOptions) {
     this.options.editor.onChange(() => {
@@ -80,12 +76,6 @@ export class EditingTransition {
 
   get isExitHeld(): boolean {
     return this.pendingSwap?.direction === "exit";
-  }
-
-  get pendingExitFileId(): SourceFileId | undefined {
-    return this.pendingSwap?.direction === "exit"
-      ? this.pendingSwap.widgetId
-      : undefined;
   }
 
   autosave(now: number): boolean {
@@ -110,7 +100,7 @@ export class EditingTransition {
     if (this.pendingRead) return false;
     if (this.session.isEditing) {
       if (this.session.widgetId === widgetId) return false;
-      this.end("another-widget");
+      this.end();
       this.rememberBegin(widgetId, contentPoint);
       return true;
     }
@@ -139,18 +129,15 @@ export class EditingTransition {
     return true;
   }
 
-  end(_reason: EditingEndReason, pendingGesture?: PendingGesture): boolean {
-    return this.exitSession(pendingGesture, true);
+  end(): boolean {
+    return this.exitSession(true);
   }
 
   discard(): boolean {
-    return this.exitSession(undefined, false);
+    return this.exitSession(false);
   }
 
-  private exitSession(
-    pendingGesture: PendingGesture | undefined,
-    applyDraft: boolean,
-  ): boolean {
+  private exitSession(applyDraft: boolean): boolean {
     if (this.pendingRead) {
       this.pendingRead.cancelled = true;
       this.pendingRead = undefined;
@@ -173,31 +160,47 @@ export class EditingTransition {
     this.pendingSwap = {
       direction: "exit",
       widgetId: draft.fileId,
-      ...(pendingGesture ? { pendingGesture } : {}),
     };
     if (applyDraft) this.session.end();
     else this.session.discard();
     return true;
   }
 
-  takeFrameSwap(): FrameSwap | undefined {
+  applyFrameSwap(): EditingSwapResult {
+    this.frameResult.direction = undefined;
+    this.frameResult.widgetId = undefined;
+    this.frameResult.needsAnotherTick = false;
     const swap = this.pendingSwap;
-    if (!swap) return undefined;
+    if (!swap) return this.frameResult;
     if (
       swap.direction === "exit" &&
       this.pendingExitVersion !== undefined &&
-      !this.options.tilesCurrent(swap.widgetId, this.pendingExitVersion)
-    )
-      return undefined;
+      !this.options.gpuView.exitViewCovered(
+        swap.widgetId,
+        this.pendingExitVersion,
+      )
+    ) {
+      this.options.gpuView.setPriorityFile(swap.widgetId);
+      this.frameResult.needsAnotherTick = true;
+      return this.frameResult;
+    }
     this.pendingSwap = undefined;
     this.pendingExitVersion = undefined;
     this.latestPublishedVersion = undefined;
+    this.frameResult.direction = swap.direction;
+    this.frameResult.widgetId = swap.widgetId;
+    this.options.gpuView.setHiddenBody(
+      swap.direction === "enter" ? swap.widgetId : undefined,
+    );
     this.options.editor.setVisible(swap.direction === "enter");
     if (swap.direction === "exit") {
+      this.options.gpuView.setPriorityFile(undefined);
       this.options.editor.close();
       this.beginRemembered();
+    } else {
+      this.options.editor.focus();
     }
-    return swap;
+    return this.frameResult;
   }
 
   private rememberBegin(
@@ -266,6 +269,19 @@ export class EditingTransition {
       language: editorLanguage(result.path),
       cursor,
     });
+    const placement = this.session.placement;
+    if (!placement) return;
+    this.options.editor.setBounds(
+      {
+        x: placement.cameraOffsetX + placement.frame.x * placement.cameraScale,
+        y:
+          placement.cameraOffsetY +
+          (placement.frame.y + this.options.bodyTop) * placement.cameraScale,
+        width: placement.frame.width,
+        height: placement.frame.height - this.options.bodyTop,
+      },
+      placement.cameraScale,
+    );
     this.options.editor.setScrollTop(row.contentScroll);
     this.options.editor.setReadOnly(false);
     this.options.editor.setVisible(false);

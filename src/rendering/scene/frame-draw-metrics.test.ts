@@ -8,6 +8,7 @@ import {
 
 function metrics(): FrameDrawMetrics {
   return {
+    textWeight: 1,
     tileMemoryBytes: 0,
     missingTile: false,
     visibleWidgetCount: 0,

@@ -31,10 +31,6 @@ export function roundMetric(value: number): number {
   return Math.round(value * METRIC_PRECISION) / METRIC_PRECISION;
 }
 
-export function isWhitespaceCluster(cluster: string): boolean {
-  return /^\s+$/u.test(cluster);
-}
-
 export function calculateBaseline(
   lineHeight: number,
   fontBoundingBoxAscent: number,

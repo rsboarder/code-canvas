@@ -8,6 +8,7 @@ import {
   type TraceEvent,
   type TraceMetrics,
 } from "./trace";
+import { isRecord } from "./is-record";
 
 type TraceFileReader = (path: string) => Promise<Uint8Array>;
 
@@ -90,8 +91,4 @@ function invalidTraceFile(error: unknown): InvalidMeasurement {
     reason: "trace-parse-failed",
     detail: error instanceof Error ? error.message : String(error),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

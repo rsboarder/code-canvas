@@ -8,20 +8,6 @@ import {
   type TileRecordSource,
 } from "./tile-records";
 
-class FakePool {
-  readonly released: string[] = [];
-
-  readonly pinned = new Set<string>();
-
-  release(key: string): void {
-    this.released.push(key);
-  }
-
-  isPinned(key: string): boolean {
-    return this.pinned.has(key);
-  }
-}
-
 const SOURCE: TileRecordSource = {
   fileId: "file-a",
   filePath: "src/a.ts",
@@ -33,7 +19,7 @@ const SOURCE: TileRecordSource = {
 
 describe("TileRecords", () => {
   it("ensures and finds records by kind, scale, column, and row", () => {
-    const records = new TileRecords(new FakePool(), 8);
+    const records = new TileRecords(8);
     records.setContentSource(SOURCE, 3);
     records.setHeaderHeight(32);
 
@@ -50,8 +36,8 @@ describe("TileRecords", () => {
   });
 
   it("uses the file id to keep identical tiles from different widgets unique", () => {
-    const first = new TileRecords(new FakePool(), 8);
-    const second = new TileRecords(new FakePool(), 8);
+    const first = new TileRecords(8);
+    const second = new TileRecords(8);
     first.setContentSource(SOURCE, 1);
     second.setContentSource(
       { ...SOURCE, fileId: "file-b", filePath: "src/b.ts" },
@@ -64,9 +50,8 @@ describe("TileRecords", () => {
     expect(first.keys[firstRecord]).not.toBe(second.keys[secondRecord]);
   });
 
-  it("releases labels when their file path changes", () => {
-    const pool = new FakePool();
-    const records = new TileRecords(pool, 8);
+  it("keeps old header records for lifecycle eviction", () => {
+    const records = new TileRecords(8);
     records.setContentSource(SOURCE, 1);
     records.setHeaderHeight(32);
     const oldHeader = records.ensureRecord(HEADER_KIND, 1, 0, 0);
@@ -75,29 +60,24 @@ describe("TileRecords", () => {
     records.setContentSource({ ...SOURCE, filePath: "src/b.ts" }, 2);
 
     expect(oldKey).toBeDefined();
-    expect(pool.released).toContain(oldKey);
     expect(records.findRecord(HEADER_KIND, 1, 0, 0)).toBe(-1);
     const newHeader = records.ensureRecord(HEADER_KIND, 1, 0, 0);
     expect(records.keys[newHeader]).not.toBe(oldKey);
   });
 
-  it("releases an unpinned record when capacity is exhausted", () => {
-    const pool = new FakePool();
-    const records = new TileRecords(pool, 1);
+  it("does not evict an active record when capacity is exhausted", () => {
+    const records = new TileRecords(1);
     records.setContentSource(SOURCE, 1);
-    const first = records.ensureRecord(CONTENT_KIND, 1, 0, 0);
-    const firstKey = records.keys[first];
-
+    records.ensureRecord(CONTENT_KIND, 1, 0, 0);
     const second = records.ensureRecord(CONTENT_KIND, 1, 1, 0);
 
-    expect(second).toBe(first);
-    expect(pool.released).toContain(firstKey);
+    expect(second).toBe(-1);
   });
 });
 
 describe("TileRecords label lifecycle", () => {
   it("copies a body-space label rect instead of centring on document content", () => {
-    const records = new TileRecords(new FakePool(), 8);
+    const records = new TileRecords(8);
     const label = {
       identity: "src/a.ts\u0000a.ts\u000018",
       x: 380,
@@ -115,8 +95,7 @@ describe("TileRecords label lifecycle", () => {
   });
 
   it("keeps the label record through a content change", () => {
-    const pool = new FakePool();
-    const records = new TileRecords(pool, 8);
+    const records = new TileRecords(8);
     const label = {
       identity: "src/a.ts\u0000a.ts\u000018",
       x: 380,
@@ -132,12 +111,10 @@ describe("TileRecords label lifecycle", () => {
 
     expect(records.findRecord(LABEL_KIND, 1, 0, 0)).toBe(record);
     expect(records.keys[record]).toBe(key);
-    expect(pool.released).toEqual([]);
   });
 
   it("keeps the previous label when its settled layout changes", () => {
-    const pool = new FakePool();
-    const records = new TileRecords(pool, 8);
+    const records = new TileRecords(8);
     const oldLabel = {
       identity: "src/a.ts\u0000a.ts\u000018",
       x: 380,
@@ -160,6 +137,5 @@ describe("TileRecords label lifecycle", () => {
 
     expect(records.findRecordByKey(oldKey ?? "")).toBe(oldRecord);
     expect(newRecord).not.toBe(oldRecord);
-    expect(pool.released).toEqual([]);
   });
 });

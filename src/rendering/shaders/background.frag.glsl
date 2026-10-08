@@ -6,7 +6,7 @@ uniform vec4 frameColor;
 uniform vec4 scrollThumbColor;
 uniform float devicePixelRatio;
 uniform float cameraScale;
-uniform float detailLevel;
+uniform float contentAlpha;
 uniform float bodyTop;
 uniform float gutterWidth;
 uniform float minimumThumbHeight;
@@ -34,7 +34,7 @@ void main() {
   float bodyHeight = max(0.0, widgetFrame.w - bodyTop);
   float contentScroll = scrollState.x;
   float maxContentScroll = scrollState.y;
-  bool hasScroll = detailLevel < 0.5 && maxContentScroll > 0.0;
+  bool hasScroll = maxContentScroll > 0.0;
   if (hasScroll) {
     float contentHeight = bodyHeight + maxContentScroll;
     float thumbHeight = max(
@@ -46,7 +46,7 @@ void main() {
     bool inGutter = local.x >= widgetFrame.z - frameThickness - gutterWidth;
     bool inThumb = local.y >= thumbTop && local.y < thumbTop + thumbHeight;
     if (inGutter && inThumb) {
-      color = scrollThumbColor;
+      color = mix(backgroundColor, scrollThumbColor, contentAlpha);
       return;
     }
   }

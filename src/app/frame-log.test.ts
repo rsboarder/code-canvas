@@ -8,6 +8,7 @@ describe("FrameLog", () => {
     for (let index = 0; index < 513; index += 1) {
       log.record(
         {
+          textWeight: index / 10,
           missingTile: index % 2 === 0,
           drawnTileCount: index,
           drawnLabelTileCount: index % 3,
@@ -42,6 +43,7 @@ describe("FrameLog", () => {
     const log = new FrameLog();
     log.record(
       {
+        textWeight: 0.25,
         missingTile: true,
         drawnTileCount: 2,
         drawnLabelTileCount: 1,
@@ -69,6 +71,7 @@ describe("FrameLog", () => {
     expect(log.snapshot()[0]?.drawnUnhighlightedTileCount).toBe(2);
     expect(log.snapshot()[0]?.timeMs).toEqual(expect.any(Number));
     expect(log.snapshot()[0]?.tick).toBe(0);
+    expect(log.snapshot()[0]?.textWeight).toBeCloseTo(0.25);
     expect(log.snapshot()[0]?.onScreenLineHeight).toBe(11.1);
     expect(log.snapshot()[0]?.textReady).toBe(true);
   });
@@ -79,6 +82,7 @@ describe("FrameLog minimap metrics", () => {
     const log = new FrameLog();
     log.record(
       {
+        textWeight: 0,
         missingTile: false,
         drawnTileCount: 0,
         drawnLabelTileCount: 0,

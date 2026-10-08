@@ -32,5 +32,9 @@ test("Turning the overlay on", async ({ page }) => {
     .not.toBe(firstUpdate);
 
   await page.keyboard.press("Shift+M");
+  await expect(overlay).toBeVisible();
+  await expect(overlay).toContainText("Tile pool");
+
+  await page.keyboard.press("Shift+M");
   await expect(overlay).toBeHidden();
 });

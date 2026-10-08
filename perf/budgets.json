@@ -22,8 +22,12 @@
       "Line break in the editor": {
         "applicationTaskMs": 12,
         "extraMissedFramesPerRun": 3
+      },
+      "Typing": {
+        "applicationTaskMs": 12,
+        "extraMissedFramesPerRun": 2
       }
     },
-    "source": "performance-budget Frame budget: an edit replacing most of the editor's visible lines may take one task of up to 16 ms and miss one frame per edit (user's decision, 2026-10-03); a line break may take one task of up to 12 ms and miss one frame, three per run (user's decision, 2026-10-04)"
+    "source": "performance-budget Frame budget: an edit replacing most of the editor's visible lines may take one task of up to 16 ms and miss one frame per edit (user's decision, 2026-10-03); a line break may take one task of up to 12 ms and miss one frame, three per run (user's decision, 2026-10-04); typing may take one task of up to 12 ms and miss two frames per run (user's decisions, 2026-10-06 and 2026-10-07)"
   }
 }

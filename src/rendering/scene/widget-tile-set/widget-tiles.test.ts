@@ -4,18 +4,6 @@ import { encodeRasterCells } from "../../text/raster-job";
 import { Camera } from "../../../board/index";
 import { CONTENT_KIND, WidgetTiles } from "./index";
 
-class FakePool {
-  readonly released: string[] = [];
-
-  release(key: string): void {
-    this.released.push(key);
-  }
-
-  isPinned(): boolean {
-    return false;
-  }
-}
-
 const SOURCE = {
   fileId: "file-a",
   filePath: "src/a.ts",
@@ -34,7 +22,7 @@ const SOURCE = {
 };
 
 function preparedWidget(): WidgetTiles {
-  const widget = new WidgetTiles("file-a", new FakePool(), 32);
+  const widget = new WidgetTiles("file-a", 32);
   widget.frame.width = 512;
   widget.frame.height = 512;
   widget.setContentSource(SOURCE);
@@ -77,8 +65,13 @@ function readyTile(
   column: number,
   row: number,
 ): void {
-  const record = widget.ensureRecord(CONTENT_KIND, rasterScale, column, row);
-  widget.setRecordReady(record, true);
+  const record = widget.tileRecords.ensureRecord(
+    CONTENT_KIND,
+    rasterScale,
+    column,
+    row,
+  );
+  widget.tileRecords.setState(record, "ready", true);
 }
 
 describe("WidgetTiles readiness", () => {

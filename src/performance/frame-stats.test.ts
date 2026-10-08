@@ -305,11 +305,90 @@ describe("FrameStats overlay metrics", () => {
       visibleWidgetCount: 4,
     });
 
-    expect(stats.overlayMetrics(1600)).toEqual({
+    expect(stats.overlayMetrics(1600)).toMatchObject({
       framesPerSecond: 2,
       p99IntervalMs: 700,
       visibleWidgetCount: 4,
       detailLevel: "text",
+    });
+  });
+});
+
+describe("FrameStats detailed overlay metrics", () => {
+  it("uses the recent two-second window for drops, worst tick, and stages", () => {
+    const stats = new FrameStats();
+
+    stats.record({
+      ...sample(-2500, 100, 100),
+      afterIdle: true,
+    });
+    stats.record({
+      ...sample(0, 1, 1),
+      afterIdle: true,
+    });
+    stats.record(sample(8, 2, 3));
+    stats.record(sample(20.5, 4, 5));
+    stats.record(sample(33.01, 6, 7));
+    stats.record(sample(1000, 8, 9));
+
+    const metrics = stats.overlayMetrics(1000);
+
+    expect(metrics).toMatchObject({
+      p50IntervalMs: 12.5,
+      p99IntervalMs: 966.99,
+      droppedFrames: 2,
+      worstTickMs: 17,
+    });
+    expect(metrics.stages).toMatchObject({
+      input: { p95: 8, max: 8 },
+      draw: { p95: 9, max: 9 },
+    });
+  });
+
+  it("computes posted raster jobs per second from the running total", () => {
+    const stats = new FrameStats();
+
+    stats.record({ ...sample(0, 1, 2), rasterJobsPostedTotal: 10 });
+    stats.record({ ...sample(500, 1, 2), rasterJobsPostedTotal: 12 });
+    stats.record({ ...sample(1000, 1, 2), rasterJobsPostedTotal: 16 });
+
+    expect(stats.overlayMetrics(1000).rasterJobsPostedPerSecond).toBe(6);
+  });
+
+  it("reports the latest overlay view and tile values", () => {
+    const stats = new FrameStats();
+
+    stats.record({
+      ...sample(0, 1, 2),
+      detailLevel: "text",
+      visibleWidgetCount: 2,
+      totalWidgetCount: 5,
+      cameraZoom: 1.25,
+      textWeight: 0.75,
+      tilePoolSlotsInUse: 3,
+      tilePoolCapacity: 8,
+      tileMemoryBytes: 4 * 1024 * 1024,
+      rasterJobsInFlight: 2,
+      drawnTileCount: 12,
+      drawnFallbackTileCount: 4,
+      timeToSharpMs: 18,
+      residencyBacklogDepth: 6,
+    });
+
+    expect(stats.overlayMetrics(0)).toMatchObject({
+      visibleWidgetCount: 2,
+      totalWidgetCount: 5,
+      detailLevel: "text",
+      textWeight: 0.75,
+      tilePoolSlotsInUse: 3,
+      tilePoolCapacity: 8,
+      tileMemoryBytes: 4 * 1024 * 1024,
+      rasterJobsInFlight: 2,
+      drawnTileCount: 12,
+      drawnFallbackTileCount: 4,
+      timeToSharpMs: 18,
+      residencyBacklog: 6,
+      cameraZoom: 1.25,
     });
   });
 });

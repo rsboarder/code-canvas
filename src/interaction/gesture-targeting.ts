@@ -5,7 +5,6 @@ import {
   type HitTestResult,
   type WidgetRow,
 } from "../board";
-import type { EditingEndReason } from "../editing";
 import {
   MAX_ZOOM_STEP_LN,
   PINCH_WHEEL_DELTA_PER_LN_SCALE,
@@ -57,6 +56,9 @@ export interface FrameIntents {
   fitAll: boolean;
   zoomTo100: boolean;
   zoomToWidgetId: WidgetId | undefined;
+  beginEditingWidgetId: WidgetId | undefined;
+  beginEditingContentX: number;
+  beginEditingContentY: number;
   toggleMetricsOverlay: boolean;
   panX: number;
   panY: number;
@@ -65,8 +67,6 @@ export interface FrameIntents {
   zoomY: number;
   scrollWidgetId: WidgetId | undefined;
   scrollDeltaY: number;
-  endEditing: EditingEndReason | undefined;
-  pendingGesture: "pan" | "zoom" | undefined;
   gestureInProgress: boolean;
   zoomGestureActive: boolean;
   gestureEnded: boolean;
@@ -74,6 +74,7 @@ export interface FrameIntents {
   zoomFocusX: number;
   zoomFocusY: number;
   zoomingOut: boolean;
+  zoomingIn: boolean;
   moveWidgetId: WidgetId | undefined;
   moveX: number;
   moveY: number;
@@ -104,10 +105,10 @@ export class GestureTargeting {
   private zoomX = 0;
   private zoomY = 0;
   private zoomingOut = false;
+  private zoomingIn = false;
   private scrollWidgetId: WidgetId | undefined;
   private scrollDeltaY = 0;
-  private endEditing: EditingEndReason | undefined;
-  private pendingGesture: "pan" | "zoom" | undefined;
+  private exitRequested = false;
   private gestureEnded = false;
   private endedGestureWasZoom = false;
   private wheelInProgress = false;
@@ -133,6 +134,9 @@ export class GestureTargeting {
   private fitAll = false;
   private zoomTo100 = false;
   private zoomToWidgetId: WidgetId | undefined;
+  private beginEditingWidgetId: WidgetId | undefined;
+  private beginEditingContentX = 0;
+  private beginEditingContentY = 0;
   private toggleMetricsOverlay = false;
 
   constructor(
@@ -144,12 +148,8 @@ export class GestureTargeting {
     return this.wheelInProgress || this.pointerInProgress;
   }
 
-  get endEditingRequest(): EditingEndReason | undefined {
-    return this.endEditing;
-  }
-
-  get endEditingGesture(): "pan" | "zoom" | undefined {
-    return this.pendingGesture;
+  get editingExitRequested(): boolean {
+    return this.exitRequested;
   }
 
   wheel(event: WheelInput): void {
@@ -230,15 +230,13 @@ export class GestureTargeting {
   requestFitAll(): void {
     this.fitAll = true;
     if (this.editing.activeWidgetId === undefined) return;
-    this.endEditing = "zoom";
-    this.pendingGesture = undefined;
+    this.exitRequested = true;
   }
 
   requestZoomTo100(): void {
     this.zoomTo100 = true;
     if (this.editing.activeWidgetId === undefined) return;
-    this.endEditing = "zoom";
-    this.pendingGesture = undefined;
+    this.exitRequested = true;
   }
 
   keyDown(event: KeyInput): void {
@@ -277,9 +275,16 @@ export class GestureTargeting {
     readonly offsetX: number;
     readonly offsetY: number;
   }): void {
-    if (this.board.detailLevel !== "minimap") return;
     this.board.hitTest(event.offsetX, event.offsetY, this.hit);
-    this.zoomToWidgetId = this.hit.widgetId;
+    if (this.board.detailLevel === "minimap") {
+      this.zoomToWidgetId = this.hit.widgetId;
+      return;
+    }
+    if (this.hit.zone !== "body") return;
+    if (this.hit.widgetId === undefined) return;
+    this.beginEditingWidgetId = this.hit.widgetId;
+    this.beginEditingContentX = this.hit.contentX;
+    this.beginEditingContentY = this.hit.contentY;
   }
 
   takeIntents(now: number): FrameIntents {
@@ -295,6 +300,9 @@ export class GestureTargeting {
     this.intents.fitAll = this.fitAll;
     this.intents.zoomTo100 = this.zoomTo100;
     this.intents.zoomToWidgetId = this.zoomToWidgetId;
+    this.intents.beginEditingWidgetId = this.beginEditingWidgetId;
+    this.intents.beginEditingContentX = this.beginEditingContentX;
+    this.intents.beginEditingContentY = this.beginEditingContentY;
     this.intents.toggleMetricsOverlay = this.toggleMetricsOverlay;
     this.intents.panX = this.panX;
     this.intents.panY = this.panY;
@@ -303,13 +311,12 @@ export class GestureTargeting {
     this.intents.zoomY = this.zoomY;
     this.intents.scrollWidgetId = this.scrollWidgetId;
     this.intents.scrollDeltaY = this.scrollDeltaY;
-    this.intents.endEditing = this.endEditing;
-    this.intents.pendingGesture = this.pendingGesture;
     this.intents.gestureEnded = this.gestureEnded;
     this.intents.endedGestureWasZoom = this.endedGestureWasZoom;
     this.intents.zoomFocusX = this.zoomX;
     this.intents.zoomFocusY = this.zoomY;
     this.intents.zoomingOut = this.zoomingOut;
+    this.intents.zoomingIn = this.zoomingIn;
     this.intents.moveWidgetId = this.moveWidgetId;
     this.intents.moveX = this.moveX;
     this.intents.moveY = this.moveY;
@@ -330,11 +337,11 @@ export class GestureTargeting {
     this.wheelWidgetId = this.hit.widgetId;
     if (zoom) {
       this.wheelTarget = "zoom";
-      this.markWheelEditingExit("zoom");
+      this.markWheelEditingExit();
       return;
     }
     this.wheelTarget = this.wheelTargetForHit();
-    if (this.wheelTarget === "pan") this.markWheelEditingExit("pan");
+    if (this.wheelTarget === "pan") this.markWheelEditingExit();
   }
 
   private wheelTargetForHit(): WheelTarget {
@@ -378,7 +385,8 @@ export class GestureTargeting {
     this.zoomX = event.offsetX;
     this.zoomY = event.offsetY;
     this.zoomingOut = ln < 0;
-    this.markWheelEditingExit("zoom");
+    this.zoomingIn = ln > 0;
+    this.markWheelEditingExit();
   }
 
   private pointerTargetForHit(): PointerTarget {
@@ -388,15 +396,13 @@ export class GestureTargeting {
         if (this.hit.zone === "body") return "none";
         if (this.hit.zone !== "empty") return "none";
       } else if (this.hit.widgetId !== undefined) {
-        this.endEditing = "outside";
-        this.pendingGesture = undefined;
+        this.exitRequested = true;
         return "none";
       }
     }
     if (activeId !== undefined) {
       if (this.hit.zone === "empty") {
-        this.endEditing = "pan";
-        this.pendingGesture = "pan";
+        this.exitRequested = true;
       }
     }
     if (this.hit.zone === "empty") return "pan";
@@ -436,8 +442,7 @@ export class GestureTargeting {
 
   private markPointerPanEditingExit(): void {
     if (this.editing.activeWidgetId === undefined) return;
-    this.endEditing = "pan";
-    this.pendingGesture = "pan";
+    this.exitRequested = true;
   }
 
   private toBoardX(screenX: number): number {
@@ -454,12 +459,11 @@ export class GestureTargeting {
     this.endedGestureWasZoom = this.wheelZoom;
   }
 
-  private markWheelEditingExit(kind: "pan" | "zoom"): void {
+  private markWheelEditingExit(): void {
     if (this.wheelExitReported || this.editing.activeWidgetId === undefined) {
       return;
     }
-    this.endEditing = kind;
-    this.pendingGesture = kind;
+    this.exitRequested = true;
     this.wheelExitReported = true;
   }
 
@@ -469,6 +473,9 @@ export class GestureTargeting {
     this.fitAll = false;
     this.zoomTo100 = false;
     this.zoomToWidgetId = undefined;
+    this.beginEditingWidgetId = undefined;
+    this.beginEditingContentX = 0;
+    this.beginEditingContentY = 0;
     this.toggleMetricsOverlay = false;
     this.moveWidgetId = undefined;
     this.moveX = 0;
@@ -479,8 +486,7 @@ export class GestureTargeting {
     this.zoomFactor = 1;
     this.scrollWidgetId = undefined;
     this.scrollDeltaY = 0;
-    this.endEditing = undefined;
-    this.pendingGesture = undefined;
+    this.exitRequested = false;
     this.gestureEnded = false;
     this.endedGestureWasZoom = false;
     this.bringToFrontId = undefined;
@@ -492,6 +498,9 @@ function createFrameIntents(): FrameIntents {
     fitAll: false,
     zoomTo100: false,
     zoomToWidgetId: undefined,
+    beginEditingWidgetId: undefined,
+    beginEditingContentX: 0,
+    beginEditingContentY: 0,
     toggleMetricsOverlay: false,
     panX: 0,
     panY: 0,
@@ -500,8 +509,6 @@ function createFrameIntents(): FrameIntents {
     zoomY: 0,
     scrollWidgetId: undefined,
     scrollDeltaY: 0,
-    endEditing: undefined,
-    pendingGesture: undefined,
     gestureInProgress: false,
     zoomGestureActive: false,
     gestureEnded: false,
@@ -509,6 +516,7 @@ function createFrameIntents(): FrameIntents {
     zoomFocusX: 0,
     zoomFocusY: 0,
     zoomingOut: false,
+    zoomingIn: false,
     moveWidgetId: undefined,
     moveX: 0,
     moveY: 0,

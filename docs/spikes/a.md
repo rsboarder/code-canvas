@@ -74,17 +74,17 @@ iterating with `SPIKE_IDLE_SECONDS`, `SPIKE_TRACE_SECONDS`, `SPIKE_ATTRIBUTION_S
 | Chrome visible launch from Playwright | passed | lead's headed `channel: "chrome"` run |
 | Chrome visible launch from the agent sandbox | unavailable — sandbox cannot launch visible Chrome | known environment limitation |
 | CDP scroll DOM event types/deltas | 91 `wheel`, `ctrlKey=false`, `deltaMode=0` | lead's headed run |
-| CDP scroll inertia phase | no inertia tail; 0 events | lead's headed run |
+| CDP scroll inertia phase | no inertia tail; 0 events (a real trackpad pan has one, see "Real trackpad") | lead's headed run |
 | CDP pinch DOM event types/deltas | 12 `wheel`, `ctrlKey=true`; no Safari gesture events | lead's headed run |
 | CDP pinch inertia phase | no inertia tail; 0 events | lead's headed run |
 | Trace engine API works in Node | measured — API is importable and wired in `measure.ts` | installed package API |
-| Trace engine vs DevTools frame-count match | not measured — needs human to open the saved trace in DevTools | same `.json.gz` trace |
+| Trace engine vs DevTools frame-count match | match — 2 partially presented + 1 dropped in both | 2026-10-06, a headed "Typing" trace opened in the DevTools panel; `perf/ENVIRONMENT.md` "DevTools panel cross-check" |
 | Application tasks | 50 | lead's attribution trace |
 | Longest application task | 10.184 ms | lead's attribution trace; deliberate 10 ms busy loop |
 | Browser tasks | 4760 before parent correction; 4707 leaf tasks after correction | lead result and offline corrected attribution |
 | Longest browser task | 1.494 ms | offline corrected attribution; 50 parent `RunTask`s excluded |
 | Resize/fullscreen before and after | 120.0 Hz, p99 9.3 ms, 0 intervals > 12.5 ms in every state | 2026-10-04 headed run, see "Window states" below |
-| Low Power Mode off/on | not measured — needs manual reference-MacBook run | manual checklist |
+| Low Power Mode off/on | out of scope (user's decision 2026-10-06); every run is on AC power with Low Power Mode off | — |
 
 ## Window states (2026-10-04)
 
@@ -102,8 +102,8 @@ of the table, so each row is also "after" the previous transition.
 | Fullscreen | 1800 × 1042 | 1200 | 8.3 | 9.1 | 9.3 | 9.4 | 120.00 | 0 |
 | After leaving fullscreen (macOS restores maximized) | 1800 × 986 | 1200 | 8.3 | 9.2 | 9.3 | 9.4 | 119.99 | 0 |
 
-No window state or transition needs a trigger to reach 120 Hz. Low Power Mode on was not measured: switching it needs
-the human.
+No window state or transition needs a trigger to reach 120 Hz. Low Power Mode is out of scope (user's decision
+2026-10-06).
 
 ## Manual steps
 
@@ -112,8 +112,8 @@ the human.
    estimated refresh, and intervals over 12.5 ms.
 3. Repeat after resizing the visible window, then repeat in fullscreen. Record each condition
    separately; restore the same window/fullscreen state before comparing.
-4. Repeat steps 2–3 with Low Power Mode off and on. Record the power state and the exact Chrome
-   version, machine model, display refresh rate, DPR, and window size.
+4. Record the power state (AC, Low Power Mode off — Low Power Mode on is out of scope) and the exact
+   Chrome version, machine model, display refresh rate, DPR, and window size.
 5. In DevTools Performance, record the same blank page for the same duration with the same trace
    categories. Save the trace and compare presented, partially presented, dropped, and long-frame
    counts with the runner output.
@@ -123,13 +123,39 @@ the human.
 7. Run `tsx spikes/a/measure.ts` headed on the reference machine. Keep the generated compressed
    trace so the DevTools panel can be checked against the trace-engine counts.
 
+## Real trackpad (2026-10-06)
+
+The human performed three two-finger pans with a flick and eight pinches on the reference MacBook's trackpad over
+`/spikes/a/` in Chrome 154.0.8037.98 (dev server, built-in display). The recorder saved 883 events to
+`spikes/a/results/real-trackpad-2026-10-06.json` (spike results are gitignored; the file stays on the reference
+machine): 569 `wheel` without `ctrlKey`, 227 `wheel` with `ctrlKey`, 87 `pointermove`, no Safari `gesture*` events,
+`deltaMode` 0 throughout.
+
+| | Real trackpad | CDP (`synthesizeScrollGesture` / `synthesizePinchGesture`, spike A) | Harness scenarios (`perf/harness/driver.ts`) |
+|---|---|---|---|
+| Pan event type | `wheel`, `ctrlKey` false | same | same (`Input.dispatchMouseEvent` `mouseWheel`) |
+| Pan cadence | one event per 8.3 ms (median) | 91 events per gesture | one event per frame |
+| Pan deltas | rise to a peak of 143–278 px per event within ~0.1–0.2 s, then decay smoothly to 1 px | — | constant: about 2–3.4 px per event (900–1800 px across over 4–5 s) |
+| Pan momentum | yes: a decaying tail of 86–155 events (0.7–1.4 s) after the peak; the DOM has no phase field, so the tail is indistinguishable from finger movement | none | none |
+| Pan speed | 3000–5700 px/s mean per flick, up to ≈18 000 px/s at the peak | — | ≤ 400 px/s |
+| Pinch event type | `wheel`, `ctrlKey` true; no gesture events | same | same (`modifiers: 2`) |
+| Pinch cadence and deltas | one event per 8.4 ms; `deltaY` up to 3–9.3 per event; gestures of 0.17–0.68 s with a short decay as the fingers slow | 12 events | constant 0.71 per event (×20 over 5 s) |
+| Pinch speed | ≈×2 per 0.4–0.7 s (≈×3–5/s) | — | ≈×1.8/s |
+
+Event types and the `ctrlKey` encoding agree, so GestureTargeting sees the same kind of input from CDP and from the
+trackpad. The harness gestures are an order of magnitude slower than a real flick and have no momentum tail: a real pan
+reveals far more new widgets per frame than "Pan across the whole canvas at zoom 1.0", and a real pinch changes the
+scale ≈2–3× faster than "Zoom from Fit all to 4.0 and back". Their harness verdicts therefore say nothing about fast
+gestures; the real-gesture traces of task 13.2 are the acceptance for them.
+
 ## Verdict
 
-**Pending human acceptance items.** The lead's idle run reached 120.48 Hz with no long rAF
+**120 Hz is attainable; no trigger or criterion revision.** The lead's idle run reached 120.48 Hz with no long rAF
 intervals, so 120 Hz is attainable in the stated non-fullscreen Chrome 154 condition. Window resizes,
 maximized and fullscreen, and leaving fullscreen all hold 120 Hz with no trigger (2026-10-04, "Window
-states"). Low Power Mode, a DevTools-panel comparison, and real-trackpad behavior remain unverified; no
-trigger or criterion revision is justified until those measurements are recorded.
+states"). The DevTools panel shows the same dropped and partially presented frames as the trace engine on the same trace (2026-10-06). Low Power Mode is out of scope. A real trackpad
+produces the same DOM event types as CDP, but much faster deltas and a momentum tail that CDP and the harness lack
+("Real trackpad"); real-gesture acceptance stays with task 13.2.
 
 ## Proposed design impact
 
@@ -147,9 +173,5 @@ should be used in Node as above, with one saved trace opened in DevTools as the 
 
 - What exact noise-floor threshold will the human accept for dropped, partially presented, and long
   intervals per minute?
-- Does macOS `synthesizeScrollGesture` produce the same wheel event sequence and momentum tail as
-  a recorded trackpad pan on the reference Chrome build?
-- Does macOS `synthesizePinchGesture` produce `wheel` + `ctrlKey`, Safari gesture events, or both?
-- Does the trace-engine `PipelineReporter` pairing count exactly match DevTools for the saved trace?
 - Which stack field is consistently present for application tasks in the reference Chrome trace,
   and does the attribution rule need source-map or bundle-URL normalization?

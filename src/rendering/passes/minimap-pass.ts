@@ -34,6 +34,7 @@ export class MinimapPass {
   private readonly cameraScale;
   private readonly bodyTop;
   private readonly lineHeight;
+  private readonly alpha;
   private readonly bodyTopValue: number;
   private readonly lineHeightValue: number;
   private readonly atlas: MinimapAtlas;
@@ -86,13 +87,19 @@ export class MinimapPass {
     this.cameraScale = gl.getUniformLocation(this.program, "cameraScale");
     this.bodyTop = gl.getUniformLocation(this.program, "bodyTop");
     this.lineHeight = gl.getUniformLocation(this.program, "lineHeight");
+    this.alpha = gl.getUniformLocation(this.program, "alpha");
     gl.useProgram(this.program);
     gl.uniform1i(gl.getUniformLocation(this.program, "minimap"), 0);
     gl.uniform1i(gl.getUniformLocation(this.program, "palette"), 1);
     gl.uniform1i(gl.getUniformLocation(this.program, "widgetTable"), 2);
   }
 
-  draw(camera: CameraView, table: WidgetTable, viewport: Viewport): number {
+  draw(
+    camera: CameraView,
+    table: WidgetTable,
+    viewport: Viewport,
+    alpha = 1,
+  ): number {
     if (
       this.lastAtlasGeneration !== this.atlas.generation ||
       this.lastRowsVersion !== table.rowsVersion
@@ -111,6 +118,7 @@ export class MinimapPass {
     this.gl.uniform1f(this.cameraScale, camera.scale);
     this.gl.uniform1f(this.bodyTop, this.bodyTopValue);
     this.gl.uniform1f(this.lineHeight, this.lineHeightValue);
+    this.gl.uniform1f(this.alpha, alpha);
     this.gl.activeTexture(this.gl.TEXTURE0);
     this.gl.bindTexture(this.gl.TEXTURE_2D_ARRAY, texture);
     this.gl.activeTexture(this.gl.TEXTURE1);

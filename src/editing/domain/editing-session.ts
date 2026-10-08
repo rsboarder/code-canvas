@@ -2,9 +2,6 @@ import type { SourceFileId } from "../../shared/domain";
 import type { Rect } from "../../shared/geometry";
 import type { Draft } from "./draft";
 
-export type EditingEndReason =
-  "escape" | "pan" | "zoom" | "outside" | "another-widget";
-
 export interface EditorPlacement {
   readonly cameraOffsetX: number;
   readonly cameraOffsetY: number;

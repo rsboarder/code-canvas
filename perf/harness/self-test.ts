@@ -1,19 +1,13 @@
-import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
-import { chromium, type CDPSession, type Page } from "@playwright/test";
+import { type CDPSession, type Page } from "@playwright/test";
 
 import type { PerfFile } from "../../src/performance/bridge";
 import panScenario from "../scenarios/pan-whole-canvas";
+import { type NoiseFloor } from "./preflight";
 import {
-  classifyNoiseFloor,
-  collectEnvironment,
-  evaluateNoiseFloor,
-  evaluatePreflight,
-  measureNoiseFloor,
-  type NoiseFloor,
-} from "./preflight";
-import { HEADED_WINDOW_ARGS, openHarnessPage } from "./harness-page";
-import { recordTrace } from "./trace";
+  openHarnessSession,
+  type FullHarnessSession,
+  type HarnessEnvironment,
+} from "./harness-session";
 import {
   evaluateSelfTest,
   type SelfTestCaseName,
@@ -24,8 +18,6 @@ import type { BudgetConfig, HarnessReport } from "./report";
 const GPU_ITERATIONS_FOR_SELF_TEST = 20_000;
 const GPU_ITERATIONS_RATIONALE =
   "20,000 iterations was chosen as an intentionally heavy full-screen load above the 8.33 ms frame period; tune it on the reference machine.";
-
-const PREVIEW_PORT = 4173;
 
 interface SelfTestResult {
   readonly verdict: "passed" | "failed" | "invalid" | "stage-passed";
@@ -47,7 +39,7 @@ interface SelfTestRunner {
     readonly mode: "full";
     readonly budgets: BudgetConfig;
     readonly scenarios: readonly (typeof panScenario)[];
-    readonly environment: Awaited<ReturnType<typeof collectEnvironment>>;
+    readonly environment: HarnessEnvironment;
     readonly noiseFloor: NoiseFloor;
     readonly resultDirectory: string;
   }) => Promise<SelfTestResult>;
@@ -62,76 +54,32 @@ export async function runLiveSelfTest(
   budgets: BudgetConfig,
   runner: SelfTestRunner,
 ): Promise<HarnessResult> {
-  let preview: ReturnType<typeof spawn> | undefined;
-  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
-    await execFileAsync("pnpm", ["build"], {
-      env: { ...process.env, VITE_PERF_HARNESS: "1" },
-    });
-    preview = spawn("pnpm", previewArguments(PREVIEW_PORT), {
-      env: process.env,
-      stdio: "ignore",
-    });
-    browser = await chromium.launch({
-      channel: "chrome",
-      headless: false,
-      args: HEADED_WINDOW_ARGS,
-    });
-    return await measureLiveSelfTest(browser, budgets, runner);
+    const session = await openHarnessSession("full");
+    if (session.kind === "invalid")
+      return invalidSelfTestResult(
+        session.reason,
+        session.environment,
+        session.noiseFloor,
+      );
+    try {
+      return await measureLiveSelfTest(session, budgets, runner);
+    } finally {
+      await session.close();
+    }
   } catch (error: unknown) {
     return invalidSelfTestResult(
       `self-test failed to start: ${errorMessage(error)}`,
     );
-  } finally {
-    try {
-      if (browser) await browser.close();
-    } finally {
-      preview?.kill();
-    }
   }
 }
 
 async function measureLiveSelfTest(
-  browser: Awaited<ReturnType<typeof chromium.launch>>,
+  session: FullHarnessSession,
   budgets: BudgetConfig,
   runner: SelfTestRunner,
 ): Promise<HarnessResult> {
-  const page = await openHarnessPage(browser, true);
-  await gotoPreview(page, PREVIEW_PORT);
-  if (!(await runner.waitForApplicationBridge(page)))
-    return invalidSelfTestResult("application bridge is unavailable");
-  const cdp = await page.context().newCDPSession(page);
-  const environment = await collectEnvironment(
-    browser,
-    page,
-    cdp,
-    runSystemCommand,
-  );
-  const preflight = evaluatePreflight(environment);
-  if (!preflight.valid)
-    return invalidSelfTestResult(
-      `preflight failed: ${preflight.reasons.join("; ")}`,
-      environment,
-    );
-  const measuredNoiseFloor = await measureNoiseFloor({
-    page,
-    cdp,
-    durationMs: 60_000,
-    recordTrace,
-    classifyTrace: classifyNoiseFloor,
-  });
-  if ("valid" in measuredNoiseFloor)
-    return invalidSelfTestResult(
-      `noise floor measurement invalid: ${measuredNoiseFloor.reason}${measuredNoiseFloor.detail ? `: ${measuredNoiseFloor.detail}` : ""}`,
-      environment,
-    );
-  const noiseFloor = measuredNoiseFloor;
-  if (!evaluateNoiseFloor(noiseFloor).valid)
-    return invalidSelfTestResult(
-      "noise floor exceeds the reference threshold",
-      environment,
-      noiseFloor,
-    );
+  const { page, cdp, environment, noiseFloor } = session;
   const files = await runner.readReferenceFiles();
   if (files.length === 0)
     return invalidSelfTestResult(
@@ -186,7 +134,7 @@ interface CaseOptions {
   readonly cdp: CDPSession;
   readonly files: PerfFile[];
   readonly budgets: BudgetConfig;
-  readonly environment: Awaited<ReturnType<typeof collectEnvironment>>;
+  readonly environment: HarnessEnvironment;
   readonly noiseFloor: NoiseFloor;
   readonly root: string;
   readonly runner: SelfTestRunner;
@@ -344,7 +292,7 @@ function errorMessage(error: unknown): string {
 
 function invalidSelfTestResult(
   reason: string,
-  environment: Awaited<ReturnType<typeof collectEnvironment>> | null = null,
+  environment: HarnessEnvironment | null = null,
   noiseFloor: NoiseFloor | null = null,
 ): HarnessResult {
   return {
@@ -360,50 +308,4 @@ function invalidSelfTestResult(
       invalidReason: reason,
     },
   };
-}
-
-const execFileAsync = promisify(execFile);
-
-async function runSystemCommand(
-  command: string,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  try {
-    const result = await execFileAsync("sh", ["-lc", command]);
-    return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
-  } catch (error: unknown) {
-    const failure = error as {
-      stdout?: string;
-      stderr?: string;
-      code?: number;
-    };
-    return {
-      stdout: failure.stdout ?? "",
-      stderr: failure.stderr ?? "",
-      exitCode: failure.code ?? 1,
-    };
-  }
-}
-
-function previewArguments(port: number): string[] {
-  return [
-    "vite",
-    "preview",
-    "--host",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--strictPort",
-  ];
-}
-
-async function gotoPreview(page: Page, port: number): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    try {
-      await page.goto(`http://127.0.0.1:${String(port)}`);
-      return;
-    } catch (error: unknown) {
-      if (attempt === 19) throw error;
-      await new Promise<void>((resolve) => setTimeout(resolve, 100));
-    }
-  }
 }

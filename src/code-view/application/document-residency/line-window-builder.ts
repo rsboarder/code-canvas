@@ -1,5 +1,6 @@
 import {
   createLineGeometry,
+  isWhitespaceCluster,
   LineLayout,
   type LineGeometry,
   type LineMetrics,
@@ -146,33 +147,6 @@ export class LineWindowBuilder {
     this.cellXs = grow(this.cellXs, capacity);
     this.cellColors = grow(this.cellColors, capacity);
   }
-}
-
-function isWhitespaceCluster(
-  line: string,
-  start: number,
-  end: number,
-): boolean {
-  if (start >= end) return true;
-  for (let index = start; index < end; index += 1) {
-    if (!isWhitespaceCodeUnit(line.charCodeAt(index))) return false;
-  }
-  return true;
-}
-
-function isWhitespaceCodeUnit(code: number): boolean {
-  return (
-    (code >= 0x0009 && code <= 0x000d) ||
-    code === 0x0020 ||
-    code === 0x00a0 ||
-    code === 0x1680 ||
-    (code >= 0x2000 && code <= 0x200a) ||
-    (code >= 0x2028 && code <= 0x2029) ||
-    code === 0x202f ||
-    code === 0x205f ||
-    code === 0x3000 ||
-    code === 0xfeff
-  );
 }
 
 interface RecolorWorkOptions {

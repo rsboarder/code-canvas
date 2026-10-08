@@ -3,6 +3,7 @@ import {
   type PerfBridge,
   type Statistic,
 } from "../../src/performance/bridge";
+import { isRecord } from "./is-record";
 
 export interface BridgeStageMetrics {
   readonly p50: Statistic;
@@ -80,8 +81,4 @@ function readCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? value
     : 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

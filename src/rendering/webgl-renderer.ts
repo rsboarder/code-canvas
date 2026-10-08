@@ -10,7 +10,6 @@ import type {
 } from "../code-view/index";
 import type { FontDefinition } from "../shared/font";
 import type { GesturePhase } from "../shared/frame";
-import type { Rect } from "../shared/geometry/geometry";
 import { CANVAS_CLEAR_COLOR } from "./clear-color";
 import { BackgroundPass } from "./passes/background-pass";
 import type { TileDrawContext } from "./passes/tile-pass";
@@ -22,24 +21,27 @@ import type { WidgetId, WidgetTableBoard } from "./scene/widget-table";
 import type {
   TileDebugSnapshot,
   TileDemand,
+  FrameTileMetrics,
   TileResidency,
 } from "./scene/tile-residency";
 import type { RenderingProbeSource } from "./probe";
-import {
-  bodyViewWindow,
-  type BodyViewWindowInput,
-  type ViewWindow,
-} from "./scene/tile-view-window";
 import {
   type MutableLineRange,
   visibleLineRange,
 } from "./scene/visible-line-ranges";
 import type { CodeTextMetrics } from "./text/text-metrics";
 import type { Viewport } from "./viewport";
+import { VisibleBodyProjection } from "./visible-body-projection";
+import {
+  detailFrameFor,
+  type DetailFrame,
+  stepTextWeight,
+} from "./detail-fade";
 
 export class WebGlRenderer implements GpuUploader {
   private readonly gl: WebGL2RenderingContext;
   private readonly table: WidgetTable;
+  private readonly visibleBodies: VisibleBodyProjection;
   private tableTexture: WidgetTableTexture;
   private background: BackgroundPass;
   private readonly uploader: GpuUploaderAdapter;
@@ -57,30 +59,22 @@ export class WebGlRenderer implements GpuUploader {
   private readonly previousRowIds: (WidgetId | undefined)[] = [];
   private readonly rangesByRow: (MutableLineRange | undefined)[] = [];
   private readonly rangeListsByRow: (readonly LineRange[] | undefined)[] = [];
-  private readonly cullFrame: Rect = { x: 0, y: 0, width: 0, height: 0 };
-  private readonly cullWindow: ViewWindow = {
-    left: 0,
-    top: 0,
-    right: 0,
-    bottom: 0,
-  };
-  private readonly cullInput: BodyViewWindowInput = {
-    camera: new Camera(),
-    viewport: this.viewport,
-    frame: this.cullFrame,
-    bodyTop: 0,
-    contentScroll: 0,
-  };
   private previousRowCount = 0;
   private detail: DetailLevelName = "text";
+  private textWeight = 1;
+  private targetTextWeight = 1;
+  private readonly detailFrame: DetailFrame = {
+    minimapAlpha: 0,
+    contentAlpha: 1,
+    labelAlpha: 0,
+  };
+  private previousDrawTimestamp: number | undefined;
+  private needsWeightSnap = true;
   private textWanted = false;
   private gestureInProgress = false;
   private contextLost = false;
-  private redrawCallback: (() => void) | undefined;
-  private hiddenBodyId: string | undefined;
-  private priorityFileId: string | undefined;
-  private gesturePhase: GesturePhase | undefined;
   private lastMetrics: FrameDrawMetrics = {
+    textWeight: 1,
     tileMemoryBytes: 0,
     missingTile: false,
     visibleWidgetCount: 0,
@@ -104,6 +98,7 @@ export class WebGlRenderer implements GpuUploader {
     if (!gl) throw new Error("WebGL2 is required for the canvas renderer");
     this.gl = gl;
     this.table = new WidgetTable();
+    this.visibleBodies = new VisibleBodyProjection(this.table);
     this.tableTexture = new WidgetTableTexture(gl);
     this.backgroundColor = palette.background;
     this.bodyTopCss = font.bodyTop;
@@ -126,6 +121,7 @@ export class WebGlRenderer implements GpuUploader {
       viewport: this.cssViewport(canvas),
       table: this.table,
       tableTexture: this.tableTexture.texture,
+      visibleBodies: this.visibleBodies,
     });
     this.probe = {
       lineWindows: this.uploader.lineWindows,
@@ -135,9 +131,10 @@ export class WebGlRenderer implements GpuUploader {
     this.tileDraw = {
       camera: new Camera(),
       viewport: { width: 0, height: 0, devicePixelRatio: 1 },
-      titleOnly: false,
       snapToDevicePixel: true,
       bodyTop: this.bodyTopCss,
+      contentAlpha: 1,
+      labelAlpha: 1,
     };
     this.configureContextState();
     canvas.addEventListener("webglcontextlost", (event) => {
@@ -167,9 +164,22 @@ export class WebGlRenderer implements GpuUploader {
   }
 
   setDetailLevel(detail: DetailLevelName, textWanted: boolean): void {
+    const targetTextWeight = detail === "text" ? 1 : 0;
+    if (targetTextWeight !== this.targetTextWeight)
+      this.previousDrawTimestamp = undefined;
     this.detail = detail;
+    this.targetTextWeight = targetTextWeight;
+    if (this.needsWeightSnap) {
+      this.textWeight = this.targetTextWeight;
+      this.previousDrawTimestamp = undefined;
+      this.needsWeightSnap = false;
+    }
     this.textWanted = textWanted;
     this.residency.setDetailLevel(detail === "minimap", textWanted);
+  }
+
+  isFading(): boolean {
+    return this.textWeight > 0 && this.textWeight < 1;
   }
 
   cull(camera: CameraView): ReadonlyMap<string, readonly LineRange[]> {
@@ -177,9 +187,11 @@ export class WebGlRenderer implements GpuUploader {
     const rowCount = this.table.rowCount;
     this.removeRowsBeyond(rowCount);
     if (!textActive && this.visibleRanges.size > 0) this.visibleRanges.clear();
-    this.cullInput.camera = camera;
-    this.cullInput.bodyTop = this.bodyTopCss;
-    this.cssViewport(this.gl.canvas as HTMLCanvasElement);
+    this.visibleBodies.update(
+      camera,
+      this.cssViewport(this.gl.canvas as HTMLCanvasElement),
+      this.bodyTopCss,
+    );
     for (let row = 0; row < rowCount; row += 1) this.cullRow(row, textActive);
     this.previousRowCount = rowCount;
     return this.visibleRanges;
@@ -198,16 +210,15 @@ export class WebGlRenderer implements GpuUploader {
       this.previousRowIds[row] = id;
     }
     if (id === undefined || !textActive) return;
-    if (!this.table.readFrame(row, this.cullFrame)) return;
-    this.cullInput.contentScroll = this.table.contentScrollAt(row);
-    if (!bodyViewWindow(this.cullInput, this.cullWindow)) {
+    const window = this.visibleBodies.windowAt(row);
+    if (!window) {
       this.removeVisible(id);
       return;
     }
     const range = this.rangesByRow[row];
     const ranges = this.rangeListsByRow[row];
     if (!range || !ranges) return;
-    visibleLineRange(this.cullWindow, this.lineHeight, range);
+    visibleLineRange(window, this.lineHeight, range);
     if (idChanged || !this.visibleRanges.has(id))
       this.visibleRanges.set(id, ranges);
   }
@@ -217,7 +228,6 @@ export class WebGlRenderer implements GpuUploader {
   }
 
   setHiddenBody(fileId: string | undefined): void {
-    this.hiddenBodyId = fileId;
     this.residency.setHiddenBody(fileId);
   }
 
@@ -241,7 +251,6 @@ export class WebGlRenderer implements GpuUploader {
   // (design D8): this schedules the tick that drains and draws it, so the
   // loop never goes idle with resident work still waiting.
   onNeedsRedraw(callback: () => void): void {
-    this.redrawCallback = callback;
     this.residency.onNeedsRedraw(callback);
   }
 
@@ -253,6 +262,10 @@ export class WebGlRenderer implements GpuUploader {
     this.residency.tileDemand(out);
   }
 
+  frameTileMetrics(out: FrameTileMetrics): void {
+    this.residency.frameTileMetrics(out);
+  }
+
   exitViewCovered(widgetId: string, contentVersion: number): boolean {
     return this.residency.exitViewCovered(widgetId, contentVersion);
   }
@@ -262,12 +275,10 @@ export class WebGlRenderer implements GpuUploader {
   }
 
   setPriorityFile(fileId: string | undefined): void {
-    this.priorityFileId = fileId;
     this.residency.setPriorityFile(fileId);
   }
 
   setGesturePhase(phase: GesturePhase): void {
-    this.gesturePhase = phase;
     this.gestureInProgress = phase.gestureInProgress;
     this.residency.setGesturePhase(phase);
   }
@@ -289,7 +300,10 @@ export class WebGlRenderer implements GpuUploader {
   }
 
   draw(camera: CameraView): FrameDrawMetrics {
+    const timestamp = performance.now();
+    this.updateTextWeight(timestamp);
     if (this.contextLost) return this.lastMetrics;
+    const frame = detailFrameFor(this.textWeight, this.detailFrame);
     const devicePixelRatio = window.devicePixelRatio || 1;
     twgl.resizeCanvasToDisplaySize(
       this.gl.canvas as HTMLCanvasElement,
@@ -315,32 +329,30 @@ export class WebGlRenderer implements GpuUploader {
       camera,
       this.table,
       this.tileDraw.viewport,
-      this.detail === "text" ? 0 : 1,
+      frame.contentAlpha,
     );
     this.gl.enable(this.gl.DEPTH_TEST);
     this.gl.depthFunc(this.gl.LEQUAL);
     this.gl.depthMask(false);
-    const metrics = this.residency.buildFrameInstances(
-      this.detail === "minimap",
-    );
+    const metrics = this.residency.buildFrameInstances(frame);
+    metrics.textWeight = this.textWeight;
     this.lastMetrics = metrics;
-    this.drawContent();
+    this.drawContent(frame);
     return metrics;
   }
 
-  private drawContent(): void {
-    if (this.detail === "minimap") {
+  private drawContent(frame: DetailFrame): void {
+    this.lastMetrics.drawnMinimapCount = 0;
+    if (frame.minimapAlpha > 0) {
       this.lastMetrics.drawnMinimapCount = this.uploader.minimapPass.draw(
         this.tileDraw.camera,
         this.table,
         this.tileDraw.viewport,
+        frame.minimapAlpha,
       );
-      this.tileDraw.titleOnly = true;
-      this.residency.draw(this.tileDraw);
-      return;
     }
-    this.lastMetrics.drawnMinimapCount = 0;
-    this.tileDraw.titleOnly = false;
+    this.tileDraw.contentAlpha = frame.contentAlpha;
+    this.tileDraw.labelAlpha = frame.labelAlpha;
     this.residency.draw(this.tileDraw);
   }
 
@@ -361,15 +373,28 @@ export class WebGlRenderer implements GpuUploader {
       this.bodyTopCss,
     );
     this.uploader.restore(this.tableTexture.texture);
-    this.residency.setDetailLevel(this.detail === "minimap", this.textWanted);
-    this.residency.setHiddenBody(this.hiddenBodyId);
-    this.residency.setPriorityFile(this.priorityFileId);
-    if (this.gesturePhase) this.residency.setGesturePhase(this.gesturePhase);
-    if (this.redrawCallback) this.residency.onNeedsRedraw(this.redrawCallback);
     this.configureContextState();
+    this.previousDrawTimestamp = undefined;
+    this.needsWeightSnap = true;
     this.contextLost = false;
     this.uploader.setContextLost(false);
-    this.redrawCallback?.();
+  }
+
+  private updateTextWeight(timestamp: number): void {
+    if (this.needsWeightSnap) {
+      this.textWeight = this.targetTextWeight;
+      this.needsWeightSnap = false;
+      this.previousDrawTimestamp = timestamp;
+      return;
+    }
+    const previous = this.previousDrawTimestamp;
+    this.previousDrawTimestamp = timestamp;
+    if (previous === undefined) return;
+    this.textWeight = stepTextWeight(
+      this.textWeight,
+      this.targetTextWeight,
+      timestamp - previous,
+    );
   }
 
   probeSource(): RenderingProbeSource {

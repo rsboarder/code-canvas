@@ -12,6 +12,7 @@ import {
   type Statistic,
 } from "../../src/performance/bridge";
 import { type BridgeMetrics, type BridgeStageMetrics } from "./metrics";
+import { isRecord } from "./is-record";
 
 export const TRACE_CATEGORIES = [
   "devtools.timeline",
@@ -602,10 +603,6 @@ function isTraceEvent(value: unknown): value is TraceEvent {
     typeof value.name === "string" &&
     typeof value.ts === "number"
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function emptyTaskMetrics(): MainThreadTaskMetrics {

@@ -7,6 +7,8 @@ uniform float devicePixelRatio;
 uniform float cameraScale;
 uniform float bodyTop;
 uniform float gutterWidth;
+uniform float contentAlpha;
+uniform float labelAlpha;
 in vec2 uv;
 flat in vec2 uvMin;
 flat in vec2 uvMax;
@@ -33,5 +35,8 @@ void main() {
     (inBody && (outsideBody || inGutter)) ||
     (regionOut >= 0.5 && regionOut < 1.5 && outsideHeader)
   ) discard;
-  color = texture(tiles, clamp(uv, uvMin + halfTexel, uvMax - halfTexel));
+  vec4 tileColor = texture(tiles, clamp(uv, uvMin + halfTexel, uvMax - halfTexel));
+  float alpha = regionOut < 0.5 ? contentAlpha :
+    (regionOut >= 1.5 ? labelAlpha : 1.0);
+  color = vec4(tileColor.rgb, tileColor.a * alpha);
 }

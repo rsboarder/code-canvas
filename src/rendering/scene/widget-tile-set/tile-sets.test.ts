@@ -3,44 +3,22 @@ import { describe, expect, it } from "vitest";
 import {
   TileSetPlanner,
   TileRecords,
+  CONTENT_KIND,
+  HEADER_KIND,
+  LABEL_KIND,
+} from "./index";
+import {
   coarseRasterScale,
   gestureStepRasterScale,
-} from "./index";
+} from "./text-tile-raster-scale-rule";
 import { computeTilePoolCapacity } from "../tile-plan";
 import { viewBoundsAtZoom } from "../tile-view-window";
 
-class FakePool {
-  readonly released: string[] = [];
-
-  release(key: string): void {
-    this.released.push(key);
-  }
-
-  isPinned(): boolean {
-    return false;
-  }
-}
-
-function records(capacity = 32) {
-  return new TileRecords(new FakePool(), capacity).records;
-}
-
-function plannerWith(scale: number, epoch: number, column = 0, row = 0) {
-  const view = records();
-  view.active[0] = 1;
-  view.ready[0] = 1;
-  view.rasterScale[0] = scale;
-  view.epoch[0] = epoch;
-  view.column[0] = column;
-  view.row[0] = row;
-  view.localX[0] = column * (512 / scale);
-  view.localY[0] = row * (512 / scale);
-  view.width[0] = 512 / scale;
-  view.height[0] = 512 / scale;
-  return { view, planner: new TileSetPlanner(view, 32) };
-}
-
 const COMMON = {
+  fileId: "file-a",
+  filePath: "src/a.ts",
+  contentVersion: 1,
+  highlighted: false,
   contentWidth: 1024,
   contentHeight: 1024,
   visibleLeft: 0,
@@ -52,6 +30,54 @@ const COMMON = {
   epoch: 1,
   recordCount: 0,
 };
+
+type RecordInput = readonly [
+  scale: number,
+  epoch?: number,
+  column?: number,
+  row?: number,
+  contentWidth?: number,
+  contentHeight?: number,
+  kind?: number,
+];
+
+function records(capacity = 32): TileRecords {
+  const value = new TileRecords(capacity);
+  value.setContentSource(COMMON, 1);
+  return value;
+}
+
+function addRecord(value: TileRecords, input: RecordInput): number {
+  const [
+    scale,
+    epoch = 1,
+    column = 0,
+    row = 0,
+    contentWidth = COMMON.contentWidth,
+    contentHeight = COMMON.contentHeight,
+    kind = CONTENT_KIND,
+  ] = input;
+  value.setContentSource(
+    {
+      ...COMMON,
+      contentWidth,
+      contentHeight,
+    },
+    epoch,
+  );
+  const record = value.ensureRecord(kind, scale, column, row);
+  value.setState(record, "ready", true);
+  return record;
+}
+
+function plannerWith(scale: number, epoch: number, column = 0, row = 0) {
+  const value = records();
+  addRecord(value, [scale, epoch, column, row]);
+  return {
+    view: value.records,
+    planner: new TileSetPlanner(value.records, 32),
+  };
+}
 
 interface PlannerInput {
   readonly contentWidth: number;
@@ -120,18 +146,13 @@ describe("TileSetPlanner", () => {
       recordCount: 0,
     });
 
-    expect(planner.requestedScale).toBeCloseTo(2.74);
+    expect(planner.requestScale(CONTENT_KIND)).toBeCloseTo(2.74);
   });
 
   it("clips coverage to a short content edge before sampling", () => {
-    const view = records();
-    view.active[0] = 1;
-    view.ready[0] = 1;
-    view.rasterScale[0] = 1;
-    view.epoch[0] = 1;
-    view.width[0] = 512;
-    view.height[0] = 100;
-    const planner = new TileSetPlanner(view, 32);
+    const value = records();
+    addRecord(value, [1, 1, 0, 0, 512, 100]);
+    const planner = new TileSetPlanner(value.records, 32);
 
     buildPlanner(planner, {
       contentWidth: 512,
@@ -155,15 +176,9 @@ describe("TileSetPlanner", () => {
 
 describe("TileSetPlanner coverage clipping", () => {
   it("does not draw a content tile entirely past the content bottom", () => {
-    const view = records();
-    view.active[0] = 1;
-    view.ready[0] = 1;
-    view.rasterScale[0] = 0.5;
-    view.epoch[0] = 1;
-    view.localY[0] = 100;
-    view.width[0] = 512;
-    view.height[0] = 20;
-    const planner = new TileSetPlanner(view, 32);
+    const value = records();
+    addRecord(value, [0.5, 1, 0, 1, 1024, 1124]);
+    const planner = new TileSetPlanner(value.records, 32);
     buildPlanner(planner, {
       ...COMMON,
       contentHeight: 100,
@@ -174,15 +189,10 @@ describe("TileSetPlanner coverage clipping", () => {
   });
 
   it("clips a header tile to the header extent", () => {
-    const view = records();
-    view.active[0] = 1;
-    view.ready[0] = 1;
-    view.kind[0] = 1;
-    view.rasterScale[0] = 0.5;
-    view.localY[0] = 42;
-    view.width[0] = 512;
-    view.height[0] = 20;
-    const planner = new TileSetPlanner(view, 32);
+    const value = records();
+    value.setHeaderHeight(42);
+    addRecord(value, [0.5, 1, 0, 1, 512, 1024, HEADER_KIND]);
+    const planner = new TileSetPlanner(value.records, 32);
     planner.setHeaderHeight(42);
     buildPlanner(planner, { ...COMMON, gestureActive: false, recordCount: 1 });
     expect(planner.drawHeaderFallbackCount).toBe(0);
@@ -190,6 +200,27 @@ describe("TileSetPlanner coverage clipping", () => {
 });
 
 describe("TileSetPlanner gesture requests", () => {
+  it("uses the gesture step for headers and labels during a zoom gesture", () => {
+    const { planner } = plannerWith(coarseRasterScale(1.7, 2), 1);
+    buildPlanner(planner, {
+      ...COMMON,
+      zoom: 1.7,
+      devicePixelRatio: 2,
+      gestureActive: true,
+      recordCount: 0,
+    });
+
+    expect(planner.requestScale(HEADER_KIND)).toBe(
+      gestureStepRasterScale(1.7, 2),
+    );
+    expect(planner.requestScale(LABEL_KIND)).toBe(
+      gestureStepRasterScale(1.7, 2),
+    );
+    expect(planner.requestScale(CONTENT_KIND)).toBe(
+      gestureStepRasterScale(1.7, 2),
+    );
+  });
+
   it("requests a visible cell when coarse coverage is too mismatched", () => {
     const coarseScale = coarseRasterScale(1.7, 1);
     const stepScale = gestureStepRasterScale(1.7, 1);
@@ -256,20 +287,11 @@ describe("TileSetPlanner empty content", () => {
   });
 
   it("draws resident headers and labels for an empty document", () => {
-    const view = records(4);
-    view.active[0] = 1;
-    view.ready[0] = 1;
-    view.kind[0] = 1;
-    view.rasterScale[0] = 1;
-    view.width[0] = 512;
-    view.height[0] = 42;
-    view.active[1] = 1;
-    view.ready[1] = 1;
-    view.kind[1] = 2;
-    view.rasterScale[1] = 1;
-    view.width[1] = 120;
-    view.height[1] = 18;
-    const planner = new TileSetPlanner(view, 4);
+    const value = records(4);
+    value.setHeaderHeight(42);
+    addRecord(value, [1, 1, 0, 0, 1024, 1024, HEADER_KIND]);
+    addRecord(value, [1, 1, 0, 0, 1024, 1024, LABEL_KIND]);
+    const planner = new TileSetPlanner(value.records, 4);
     planner.setHeaderHeight(42);
     buildPlanner(planner, {
       ...COMMON,
@@ -286,17 +308,10 @@ describe("TileSetPlanner empty content", () => {
 
 describe("TileSetPlanner label draw set", () => {
   it("keeps a resident label tile when the content epoch changes", () => {
-    const view = records(4);
-    view.active[0] = 1;
-    view.ready[0] = 1;
-    view.kind[0] = 1;
-    view.rasterScale[0] = 1;
-    view.epoch[0] = 1;
-    view.column[0] = 0;
-    view.row[0] = 0;
-    view.width[0] = 512;
-    view.height[0] = 42;
-    const planner = new TileSetPlanner(view, 4);
+    const value = records(4);
+    value.setHeaderHeight(42);
+    addRecord(value, [1, 1, 0, 0, 1024, 1024, HEADER_KIND]);
+    const planner = new TileSetPlanner(value.records, 4);
     planner.setHeaderHeight(42);
     buildPlanner(planner, {
       contentWidth: 512,
@@ -318,15 +333,10 @@ describe("TileSetPlanner label draw set", () => {
   });
 
   it("draws the previous-scale label until the settled-scale label is ready", () => {
-    const view = records(4);
-    view.active[0] = 1;
-    view.ready[0] = 1;
-    view.kind[0] = 1;
-    view.rasterScale[0] = 1;
-    view.epoch[0] = 1;
-    view.width[0] = 512;
-    view.height[0] = 42;
-    const planner = new TileSetPlanner(view, 4);
+    const value = records(4);
+    value.setHeaderHeight(42);
+    addRecord(value, [1, 1, 0, 0, 1024, 1024, HEADER_KIND]);
+    const planner = new TileSetPlanner(value.records, 4);
     planner.setHeaderHeight(42);
     planner.setAtRestScale(2);
     buildPlanner(planner, {
@@ -351,20 +361,11 @@ describe("TileSetPlanner label draw set", () => {
 
 describe("TileSetPlanner gesture draw set", () => {
   it("draws the closer gesture-scale tile over the old at-rest tile", () => {
-    const view = records(4);
-    view.active[0] = 1;
-    view.ready[0] = 1;
-    view.rasterScale[0] = 1;
-    view.epoch[0] = 1;
-    view.width[0] = 512;
-    view.height[0] = 512;
-    view.active[1] = 1;
-    view.ready[1] = 1;
-    view.rasterScale[1] = gestureStepRasterScale(1.3, 1);
-    view.epoch[1] = 1;
-    view.width[1] = 512 / view.rasterScale[1];
-    view.height[1] = 512 / view.rasterScale[1];
-    const planner = new TileSetPlanner(view, 4);
+    const value = records(4);
+    addRecord(value, [1, 1, 0, 0, 512, 512]);
+    const gestureScale = gestureStepRasterScale(1.3, 1);
+    addRecord(value, [gestureScale, 1, 0, 0, 512, 512]);
+    const planner = new TileSetPlanner(value.records, 4);
 
     buildPlanner(planner, {
       contentWidth: 512,
@@ -420,7 +421,7 @@ describe("TileSetPlanner draw set", () => {
       epoch: 1,
       recordCount: 0,
     });
-    expect(planner.requestedScale).toBe(2);
+    expect(planner.requestScale(CONTENT_KIND)).toBe(2);
     expect(planner.requestCount).toBe(16);
     expect(planner.requestCount).toBeLessThanOrEqual(
       computeTilePoolCapacity(1024, 1024, 2),
@@ -469,20 +470,10 @@ describe("TileSetPlanner draw set", () => {
 
 describe("TileSetPlanner fully covered fallback", () => {
   it("does not draw an older epoch that is fully covered by current tiles", () => {
-    const view = records(4);
-    view.active[0] = 1;
-    view.ready[0] = 1;
-    view.rasterScale[0] = 1;
-    view.epoch[0] = 2;
-    view.width[0] = 512;
-    view.height[0] = 512;
-    view.active[1] = 1;
-    view.ready[1] = 1;
-    view.rasterScale[1] = 1;
-    view.epoch[1] = 1;
-    view.width[1] = 512;
-    view.height[1] = 512;
-    const planner = new TileSetPlanner(view, 4);
+    const value = records(4);
+    addRecord(value, [1, 2, 0, 0, 512, 512]);
+    addRecord(value, [1, 1, 0, 0, 512, 512]);
+    const planner = new TileSetPlanner(value.records, 4);
 
     buildPlanner(planner, {
       contentWidth: 512,
@@ -505,20 +496,10 @@ describe("TileSetPlanner fully covered fallback", () => {
 
 describe("TileSetPlanner gap fallback", () => {
   it("draws an older epoch where current tiles leave a gap", () => {
-    const view = records(4);
-    view.active[0] = 1;
-    view.ready[0] = 1;
-    view.rasterScale[0] = 1;
-    view.epoch[0] = 2;
-    view.width[0] = 256;
-    view.height[0] = 512;
-    view.active[1] = 1;
-    view.ready[1] = 1;
-    view.rasterScale[1] = 1;
-    view.epoch[1] = 1;
-    view.width[1] = 512;
-    view.height[1] = 512;
-    const planner = new TileSetPlanner(view, 4);
+    const value = records(4);
+    addRecord(value, [1, 2, 0, 0, 256, 512]);
+    addRecord(value, [1, 1, 0, 0, 512, 512]);
+    const planner = new TileSetPlanner(value.records, 4);
 
     buildPlanner(planner, {
       contentWidth: 512,
@@ -542,20 +523,10 @@ describe("TileSetPlanner gap fallback", () => {
 
 describe("TileSetPlanner exact-scale fallback", () => {
   it("does not draw a lower-scale tile covered by a same-epoch exact tile", () => {
-    const view = records(4);
-    view.active[0] = 1;
-    view.ready[0] = 1;
-    view.rasterScale[0] = 1;
-    view.epoch[0] = 1;
-    view.width[0] = 512;
-    view.height[0] = 512;
-    view.active[1] = 1;
-    view.ready[1] = 1;
-    view.rasterScale[1] = 0.5;
-    view.epoch[1] = 1;
-    view.width[1] = 512;
-    view.height[1] = 512;
-    const planner = new TileSetPlanner(view, 4);
+    const value = records(4);
+    addRecord(value, [1, 1, 0, 0, 512, 512]);
+    addRecord(value, [0.5, 1, 0, 0, 512, 512]);
+    const planner = new TileSetPlanner(value.records, 4);
 
     buildPlanner(planner, {
       contentWidth: 512,
@@ -578,24 +549,15 @@ describe("TileSetPlanner exact-scale fallback", () => {
 
 describe("TileSetPlanner fallback order", () => {
   it("draws fallback records oldest and lowest scale first", () => {
-    const view = records(8);
-    const recordData = [
-      { epoch: 1, scale: 2 },
-      { epoch: 2, scale: 1 },
-      { epoch: 2, scale: 1.5 },
-      { epoch: 2, scale: 2 },
+    const value = records(8);
+    const recordData: RecordInput[] = [
+      [2, 1, 0, 1, 512, 512],
+      [1, 2, 0, 0, 128, 512],
+      [1.5, 2, 1, 0, 512, 512],
+      [2, 2, 1, 0, 512, 512],
     ];
-    const positions = [128, 0, 256, 384];
-    recordData.forEach(({ epoch, scale }, index) => {
-      view.active[index] = 1;
-      view.ready[index] = 1;
-      view.rasterScale[index] = scale;
-      view.epoch[index] = epoch;
-      view.localX[index] = positions[index] ?? 0;
-      view.width[index] = 128;
-      view.height[index] = 512;
-    });
-    const planner = new TileSetPlanner(view, 8);
+    recordData.forEach((input) => addRecord(value, input));
+    const planner = new TileSetPlanner(value.records, 8);
     planner.setAtRestScale(1);
     buildPlanner(planner, {
       contentWidth: 512,
@@ -622,26 +584,22 @@ describe("TileSetPlanner fallback order", () => {
 
 describe("TileSetPlanner ranking", () => {
   it("ranks fallback records by epoch, at-rest scale, then raster scale", () => {
-    const view = records(8);
-    const recordData = [
-      { epoch: 1, scale: 2 },
-      { epoch: 2, scale: 1 },
-      { epoch: 2, scale: 1.5 },
-      { epoch: 1, scale: 0.5 },
+    const value = records(8);
+    const recordData: RecordInput[] = [
+      [2, 1, 0, 0, 256, 256],
+      [1, 2, 1, 0, 1024, 512],
+      [1.5, 2, 0, 1, 341.3333333333, 682.6666666666],
+      [0.5, 1, 1, 0, 2048, 1024],
     ];
-    recordData.forEach(({ epoch, scale }, index) => {
-      view.active[index] = 1;
-      view.ready[index] = 1;
-      view.rasterScale[index] = scale;
-      view.epoch[index] = epoch;
-      view.localX[index] = index * 128;
-      view.width[index] = 128;
-      view.height[index] = 512;
-    });
-    const planner = new TileSetPlanner(view, 8);
+    recordData.forEach((input) => addRecord(value, input));
+    const planner = new TileSetPlanner(value.records, 8);
     planner.setAtRestScale(1);
     buildPlanner(planner, {
       ...COMMON,
+      contentWidth: 2048,
+      contentHeight: 1024,
+      visibleRight: 2048,
+      visibleBottom: 1024,
       epoch: 3,
       gestureActive: false,
       recordCount: 4,
@@ -652,17 +610,10 @@ describe("TileSetPlanner ranking", () => {
   });
 
   it("ranks current gesture records by closeness to the gesture target", () => {
-    const view = records(8);
+    const value = records(8);
     const scales = [1, 2, 1.5];
-    scales.forEach((scale, index) => {
-      view.active[index] = 1;
-      view.ready[index] = 1;
-      view.rasterScale[index] = scale;
-      view.epoch[index] = 1;
-      view.width[index] = 512;
-      view.height[index] = 512;
-    });
-    const planner = new TileSetPlanner(view, 8);
+    scales.forEach((scale) => addRecord(value, [scale, 1, 0, 0, 512, 512]));
+    const planner = new TileSetPlanner(value.records, 8);
     planner.setAtRestScale(1);
     buildPlanner(planner, {
       ...COMMON,
@@ -679,10 +630,22 @@ describe("TileSetPlanner ranking", () => {
 });
 
 describe("TileSetPlanner prefetch", () => {
+  it("pins only the explicit Text prefetch scale", () => {
+    const { planner } = plannerWith(1, 1);
+    planner.setPrefetchActive(true);
+    planner.setZoom(1.5, 2, true);
+
+    expect(planner.prefetchScale()).toBe(0);
+
+    planner.setPrefetchZoom(0.55);
+
+    expect(planner.prefetchScale()).toBe(1.1);
+  });
+
   it("accepts a result at the Text prefetch scale", () => {
     const { planner } = plannerWith(1, 1);
     planner.setPrefetchActive(true);
-    planner.setPrefetchRasterScale(1.1);
+    planner.setPrefetchZoom(0.55);
     planner.setPrefetchBounds(0, 0, 512, 512);
     buildPlanner(planner, {
       ...COMMON,
@@ -708,11 +671,11 @@ describe("TileSetPlanner prefetch", () => {
     planner.setTextWanted(true);
     buildPlanner(planner, { ...COMMON, gestureActive: false });
 
-    expect(planner.requestedScale).toBe(1);
+    expect(planner.requestScale(CONTENT_KIND)).toBe(1);
     expect(planner.requestCount).toBe(4);
   });
 
-  it("uses the coarse gesture scale when Text is wanted at Minimap", () => {
+  it("uses the gesture step scale when Text is wanted at Minimap", () => {
     const { planner } = plannerWith(1, 1);
     planner.setMinimapActive(true);
     planner.setTextWanted(true);
@@ -723,7 +686,9 @@ describe("TileSetPlanner prefetch", () => {
       gestureActive: true,
     });
 
-    expect(planner.requestedScale).toBe(coarseRasterScale(1.7, 2));
+    expect(planner.requestScale(CONTENT_KIND)).toBe(
+      gestureStepRasterScale(1.7, 2),
+    );
     expect(planner.requestCount).toBeGreaterThan(0);
   });
 
@@ -760,14 +725,14 @@ describe("TileSetPlanner threshold prefetch", () => {
 
     const { planner } = plannerWith(1, 1);
     planner.setPrefetchActive(true);
-    planner.setPrefetchRasterScale(0.55 * 2);
+    planner.setPrefetchZoom(1.1);
     planner.setPrefetchBounds(0, 0, 512, 512);
     buildPlanner(planner, {
       ...COMMON,
       gestureActive: true,
       recordCount: 0,
     });
-    expect(planner.requestedScale).toBe(1);
+    expect(planner.requestScale(CONTENT_KIND)).toBe(1);
     expect(
       Array.from(planner.requestScales.slice(0, planner.requestCount)),
     ).toContain(1.1);

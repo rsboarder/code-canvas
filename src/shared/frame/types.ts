@@ -17,6 +17,8 @@ export interface FrameSample {
   detailLevel?: DetailLevelName;
   textSwitchPending?: boolean;
   visibleWidgetCount?: number;
+  totalWidgetCount?: number;
+  cameraZoom?: number;
   residencyBacklogDepth?: number;
   // Text Tiles metrics (design D6 "Tile pool", "Zoom"): the tile pool's
   // current GPU memory footprint, whether a visible tile area has no
@@ -25,6 +27,13 @@ export interface FrameSample {
   tileMemoryBytes?: number;
   missingTile?: boolean;
   timeToSharpMs?: number;
+  textWeight?: number;
+  drawnTileCount?: number;
+  drawnFallbackTileCount?: number;
+  tilePoolSlotsInUse?: number;
+  tilePoolCapacity?: number;
+  rasterJobsInFlight?: number;
+  rasterJobsPostedTotal?: number;
 }
 
 export type FrameSampleSink = (sample: FrameSample) => void;

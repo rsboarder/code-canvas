@@ -1,18 +1,78 @@
 import { describe, expect, it } from "vitest";
 
 import { encodeRasterCells } from "../../text/raster-job";
+import type { RasterJob, RasterResult } from "../../text/raster-job";
 import { Camera } from "../../../board/index";
-import { CONTENT_KIND, WidgetTiles, coarseRasterScale } from "./index";
+import type { SlotAcquireResult } from "../tile-slot-allocator";
+import { TileLifecycle } from "../tile-lifecycle";
+import { CONTENT_KIND, HEADER_KIND, WidgetTiles } from "./index";
+import { gestureStepRasterScale } from "./text-tile-raster-scale-rule";
 
 class FakePool {
-  readonly released: string[] = [];
+  private readonly keys = new Set<string>();
 
-  release(key: string): void {
-    this.released.push(key);
+  touch(): void {
+    return;
+  }
+
+  setPinned(): void {
+    return;
   }
 
   isPinned(): boolean {
     return false;
+  }
+
+  acquire(key: string): SlotAcquireResult {
+    this.keys.add(key);
+    return { slot: 0, evictedKey: undefined };
+  }
+
+  release(key: string): void {
+    this.keys.delete(key);
+  }
+
+  upload(key: string, bitmap: ImageBitmap): boolean {
+    return bitmap.width > 0 && this.keys.has(key);
+  }
+}
+
+class FakeQueue {
+  readonly jobs: RasterJob[] = [];
+
+  readonly results: RasterResult[] = [];
+
+  readonly inFlightCount = 0;
+
+  get postedTotal(): number {
+    return this.jobs.length;
+  }
+
+  beginFrame(): void {
+    return;
+  }
+
+  canPost(): boolean {
+    return true;
+  }
+
+  post(job: RasterJob): void {
+    this.jobs.push({ ...job });
+  }
+
+  drainResults(out: RasterResult[]): number {
+    out.length = this.results.length;
+    for (let index = 0; index < this.results.length; index += 1) {
+      const result = this.results[index];
+      if (result) out[index] = result;
+    }
+    const count = this.results.length;
+    this.results.length = 0;
+    return count;
+  }
+
+  dispose(): void {
+    return;
   }
 }
 
@@ -34,7 +94,7 @@ const SOURCE = {
 };
 
 function preparedWidget(): WidgetTiles {
-  const widget = new WidgetTiles("file-a", new FakePool(), 32);
+  const widget = new WidgetTiles("file-a", 32);
   widget.frame.width = 512;
   widget.frame.height = 512;
   widget.visibleWindow.right = 512;
@@ -54,7 +114,7 @@ function prepareWidget(
   input.viewport.width = 512;
   input.viewport.height = 512;
   input.viewport.devicePixelRatio = 2;
-  input.bodyTop = 0;
+  input.bodyTop = 42;
   input.contentScroll = 0;
   input.minimapActive = false;
   input.textWanted = true;
@@ -69,37 +129,123 @@ function prepareWidget(
   widget.prepare(input);
 }
 
+function resultFor(job: RasterJob): RasterResult {
+  return {
+    tileKey: job.tileKey,
+    contentVersion: job.contentVersion,
+    rasterScale: job.rasterScale,
+    bitmap: { width: 512, height: 512, close: () => undefined },
+  };
+}
+
 describe("WidgetTiles entry point", () => {
   it("uses the camera scale during a gesture and settled zoom otherwise", () => {
     const widget = preparedWidget();
 
     prepareWidget(widget, false, 1.7, 1.25);
-    expect(widget.requestedScale).toBe(2.5);
+    expect(widget.requestScale(CONTENT_KIND)).toBe(2.5);
 
     prepareWidget(widget, true, 1.7, 1.25);
-    expect(widget.requestedScale).toBe(coarseRasterScale(1.7, 2));
+    expect(widget.requestScale(CONTENT_KIND)).toBe(
+      gestureStepRasterScale(1.7, 2),
+    );
+  });
+});
+
+describe("WidgetTiles header draw outcome", () => {
+  it("draws the step-scale header during a zoom gesture", () => {
+    const widget = preparedWidget();
+    prepareWidget(widget, true, 1.3, 1);
+    const atRestScale = 2;
+    const stepScale = gestureStepRasterScale(1.3, 2);
+    const atRest = widget.tileRecords.ensureRecord(
+      HEADER_KIND,
+      atRestScale,
+      0,
+      0,
+    );
+    const step = widget.tileRecords.ensureRecord(HEADER_KIND, stepScale, 0, 0);
+    widget.tileRecords.setState(atRest, "ready", true);
+    widget.tileRecords.setState(step, "ready", true);
+
+    prepareWidget(widget, true, 1.3, 1);
+
+    expect(
+      Array.from(
+        widget.drawSet.drawHeaderCurrent.slice(
+          0,
+          widget.drawSet.drawHeaderCurrentCount,
+        ),
+      ),
+    ).toContain(step);
   });
 
+  it("draws the at-rest header when the zoom gesture is inactive", () => {
+    const widget = preparedWidget();
+    prepareWidget(widget, false, 1.3, 1);
+    const atRestScale = widget.requestScale(HEADER_KIND);
+    const atRest = widget.tileRecords.ensureRecord(
+      HEADER_KIND,
+      atRestScale,
+      0,
+      0,
+    );
+    const step = widget.tileRecords.ensureRecord(
+      HEADER_KIND,
+      gestureStepRasterScale(1.3, 2),
+      0,
+      0,
+    );
+    widget.tileRecords.setState(atRest, "ready", true);
+    widget.tileRecords.setState(step, "ready", true);
+
+    prepareWidget(widget, false, 1.3, 1);
+
+    expect(
+      Array.from(
+        widget.drawSet.drawHeaderCurrent.slice(
+          0,
+          widget.drawSet.drawHeaderCurrentCount,
+        ),
+      ),
+    ).toEqual([atRest]);
+  });
+});
+
+describe("WidgetTiles lifecycle", () => {
   it("accepts a result only while its tile remains requested", () => {
     const widget = preparedWidget();
     prepareWidget(widget, false, 1, 1);
-    const stale = widget.ensureRecord(CONTENT_KIND, 1, 0, 0);
-    widget.setRequestedContentVersion(stale, SOURCE.contentVersion);
+    const pool = new FakePool();
+    const queue = new FakeQueue();
+    const lifecycle = new TileLifecycle({
+      pool,
+      jobQueue: queue,
+      rasterFont: "16px Code",
+    });
+    lifecycle.attach(widget);
+    widget.plan.requestHeaderCount = 0;
+    widget.plan.requestLabel = false;
+    widget.plan.requestCount = 1;
+    widget.plan.requestScales[0] = 1;
+    widget.plan.requestColumns[0] = 0;
+    widget.plan.requestRows[0] = 0;
+    lifecycle.beginFrame(Number.POSITIVE_INFINITY);
+    lifecycle.request(widget);
+    const staleJob = queue.jobs[0];
+    if (!staleJob) throw new Error("Expected a stale raster job.");
 
-    expect(
-      widget.isResultCurrent(stale, {
-        rasterScale: 1,
-        contentVersion: SOURCE.contentVersion,
-      }),
-    ).toBe(false);
+    widget.plan.requestScales[0] = 2;
+    expect(staleJob.rasterScale).toBe(1);
+    expect(widget.plan.isRequested(1, 0, 0, widget.epoch)).toBe(false);
+    queue.results.push(resultFor(staleJob));
+    expect(lifecycle.drainResults()).toBe(0);
 
-    const requested = widget.ensureRecord(CONTENT_KIND, 2, 0, 0);
-    widget.setRequestedContentVersion(requested, SOURCE.contentVersion);
-    expect(
-      widget.isResultCurrent(requested, {
-        rasterScale: 2,
-        contentVersion: SOURCE.contentVersion,
-      }),
-    ).toBe(true);
+    lifecycle.beginFrame(Number.POSITIVE_INFINITY);
+    lifecycle.request(widget);
+    const currentJob = queue.jobs[1];
+    if (!currentJob) throw new Error("Expected a current raster job.");
+    queue.results.push(resultFor(currentJob));
+    expect(lifecycle.drainResults()).toBe(1);
   });
 });

@@ -19,7 +19,8 @@ interface TileFramePainterConfig {
 export interface TileFramePaintInput {
   readonly widgets: readonly WidgetTiles[];
   count: number;
-  detailIsMinimap: boolean;
+  drawLabels: boolean;
+  drawContent: boolean;
   hiddenBodyId: string | undefined;
 }
 
@@ -45,6 +46,24 @@ export class TileFramePainter {
     contentVersion: -1,
   };
 
+  private readonly recordView: TileRecordView = {
+    key: undefined,
+    active: false,
+    ready: false,
+    pending: false,
+    kind: CONTENT_KIND,
+    rasterScale: 1,
+    epoch: 0,
+    contentVersion: -1,
+    column: 0,
+    row: 0,
+    localX: 0,
+    localY: 0,
+    width: 0,
+    height: 0,
+    highlighted: false,
+  };
+
   private bodyTopCss = 0;
   private readonly tilePass: TilePass;
   private readonly pool: TilePool;
@@ -68,10 +87,9 @@ export class TileFramePainter {
       const widget = input.widgets[index];
       if (!widget) continue;
       this.pushHeaderInstances(widget);
-      if (input.detailIsMinimap) this.pushMinimapLabel(widget);
+      if (input.drawLabels) this.pushMinimapLabel(widget);
     }
-    this.tilePass.markTitleBoundary();
-    if (input.detailIsMinimap) return;
+    if (!input.drawContent) return;
     for (let index = 0; index < input.count; index += 1) {
       const widget = input.widgets[index];
       if (!widget || widget.fileId === input.hiddenBodyId) continue;
@@ -82,14 +100,14 @@ export class TileFramePainter {
   private pushHeaderInstances(widget: WidgetTiles): void {
     this.pushRecords(
       widget,
-      widget.drawRecords(HEADER_KIND, true),
-      widget.drawRecordCount(HEADER_KIND, true),
+      widget.drawSet.drawHeaderFallback,
+      widget.drawSet.drawHeaderFallbackCount,
       true,
     );
     this.pushRecords(
       widget,
-      widget.drawRecords(HEADER_KIND, false),
-      widget.drawRecordCount(HEADER_KIND, false),
+      widget.drawSet.drawHeaderCurrent,
+      widget.drawSet.drawHeaderCurrentCount,
       false,
     );
   }
@@ -97,14 +115,14 @@ export class TileFramePainter {
   private pushContentInstances(widget: WidgetTiles): void {
     this.pushRecords(
       widget,
-      widget.drawRecords(CONTENT_KIND, true),
-      widget.drawRecordCount(CONTENT_KIND, true),
+      widget.drawSet.drawFallback,
+      widget.drawSet.drawFallbackCount,
       true,
     );
     this.pushRecords(
       widget,
-      widget.drawRecords(CONTENT_KIND, false),
-      widget.drawRecordCount(CONTENT_KIND, false),
+      widget.drawSet.drawCurrent,
+      widget.drawSet.drawCurrentCount,
       false,
     );
   }
@@ -112,14 +130,14 @@ export class TileFramePainter {
   private pushMinimapLabel(widget: WidgetTiles): void {
     this.pushRecords(
       widget,
-      widget.drawRecords(LABEL_KIND, true),
-      widget.drawRecordCount(LABEL_KIND, true),
+      widget.drawSet.drawLabelFallback,
+      widget.drawSet.drawLabelFallbackCount,
       true,
     );
     this.pushRecords(
       widget,
-      widget.drawRecords(LABEL_KIND, false),
-      widget.drawRecordCount(LABEL_KIND, false),
+      widget.drawSet.drawLabelCurrent,
+      widget.drawSet.drawLabelCurrentCount,
       false,
     );
   }
@@ -141,7 +159,8 @@ export class TileFramePainter {
     record: number,
     fallback: boolean,
   ): void {
-    const view = widget.readRecord(record);
+    widget.tileRecords.read(record, this.recordView);
+    const view = this.recordView;
     const key = view.key;
     if (!key || !view.ready) return;
     if (!this.pool.regionFor(key, this.region)) return;

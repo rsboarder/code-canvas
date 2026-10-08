@@ -17,6 +17,8 @@ type TestWheelInput = WheelInput & {
 interface HitDescription {
   readonly zone: HitZone;
   readonly widgetId?: SourceFileId;
+  readonly contentX?: number;
+  readonly contentY?: number;
 }
 
 interface Harness {
@@ -69,6 +71,8 @@ function createHarness(): Harness {
     hitTest: (_x, _y, out) => {
       out.zone = state.hit.zone;
       out.widgetId = state.hit.widgetId;
+      out.contentX = state.hit.contentX ?? 0;
+      out.contentY = state.hit.contentY ?? 0;
       return out;
     },
     readWidget: (_id, out) => {
@@ -162,7 +166,27 @@ describe("GestureTargeting wheel", () => {
 
     const intents = targeting.takeIntents(144);
     expect(Math.abs(intents.zoomFactor - 2)).toBeLessThan(1e-9);
-    expect(intents).toMatchObject({ zoomX: 42, zoomY: 64 });
+    expect(intents).toMatchObject({
+      zoomX: 42,
+      zoomY: 64,
+      zoomingIn: true,
+      zoomingOut: false,
+    });
+  });
+
+  it("reports pinch-out direction for the whole gesture", () => {
+    const { targeting } = createHarness();
+
+    targeting.wheel(wheel(0, { ctrlKey: true, deltaY: 4 }));
+
+    expect(targeting.takeIntents(0)).toMatchObject({
+      zoomingIn: false,
+      zoomingOut: true,
+    });
+    expect(targeting.takeIntents(16)).toMatchObject({
+      zoomingIn: false,
+      zoomingOut: true,
+    });
   });
 
   it("clamps the per-event pinch step", () => {
@@ -286,10 +310,7 @@ describe("GestureTargeting editing", () => {
     const event = wheel(0, { ctrlKey: true, deltaY: -4 });
     harness.targeting.wheel(event);
 
-    expect(harness.targeting.takeIntents(0)).toMatchObject({
-      endEditing: "zoom",
-      pendingGesture: "zoom",
-    });
+    expect(harness.targeting.editingExitRequested).toBe(true);
     expect(typeof harness.targeting.takeIntents(0).zoomFactor).toBe("number");
     expect(event.preventDefaultSpy).toHaveBeenCalledOnce();
   });
@@ -299,11 +320,8 @@ describe("GestureTargeting editing", () => {
     harness.editing.activeWidgetId = file;
     harness.targeting.wheel(wheel(0, { deltaY: 4 }));
 
-    expect(harness.targeting.takeIntents(0)).toMatchObject({
-      endEditing: "pan",
-      pendingGesture: "pan",
-      panY: -4,
-    });
+    expect(harness.targeting.editingExitRequested).toBe(true);
+    expect(harness.targeting.takeIntents(0)).toMatchObject({ panY: -4 });
   });
 
   it("Swipe over the editor", () => {
@@ -313,10 +331,10 @@ describe("GestureTargeting editing", () => {
     const event = wheel(0, { deltaY: 4 });
     harness.targeting.wheel(event);
 
+    expect(harness.targeting.editingExitRequested).toBe(false);
     expect(harness.targeting.takeIntents(0)).toMatchObject({
       panY: 0,
       zoomFactor: 1,
-      endEditing: undefined,
     });
     expect(event.preventDefaultSpy).not.toHaveBeenCalled();
     expect(harness.editing.activeWidgetId).toBe(file);
@@ -330,10 +348,10 @@ describe("GestureTargeting editing", () => {
     harness.targeting.pointerMove(pointer({ offsetX: 20, offsetY: 30 }));
     harness.targeting.pointerUp(pointer());
 
+    expect(harness.targeting.editingExitRequested).toBe(false);
     expect(harness.targeting.takeIntents(0)).toMatchObject({
       panX: 0,
       panY: 0,
-      endEditing: undefined,
     });
   });
 
@@ -343,7 +361,8 @@ describe("GestureTargeting editing", () => {
     harness.hit = { zone: "body", widgetId: otherFile };
     harness.targeting.pointerDown(pointer());
 
-    expect(harness.targeting.takeIntents(0).endEditing).toBe("outside");
+    expect(harness.targeting.editingExitRequested).toBe(true);
+    harness.targeting.takeIntents(0);
   });
 
   it("scrolling another widget while editing does not end it", () => {
@@ -352,7 +371,8 @@ describe("GestureTargeting editing", () => {
     harness.hit = { zone: "body", widgetId: otherFile };
     harness.targeting.wheel(wheel(0, { deltaY: 4 }));
 
-    expect(harness.targeting.takeIntents(0).endEditing).toBeUndefined();
+    expect(harness.targeting.editingExitRequested).toBe(false);
+    harness.targeting.takeIntents(0);
   });
 });
 
@@ -404,7 +424,7 @@ describe("GestureTargeting keyboard shortcuts", () => {
     }
   });
 
-  it("shortcuts exit editing with a zoom reason and no pending gesture", () => {
+  it("shortcuts request the zoom command while editing", () => {
     const harness = createHarness();
     harness.editing.activeWidgetId = file;
     const preventDefault = vi.fn();
@@ -412,10 +432,9 @@ describe("GestureTargeting keyboard shortcuts", () => {
 
     harness.targeting.keyDown(event);
 
+    expect(harness.targeting.editingExitRequested).toBe(true);
     expect(harness.targeting.takeIntents(0)).toMatchObject({
       zoomTo100: true,
-      endEditing: "zoom",
-      pendingGesture: undefined,
     });
     expect(preventDefault).toHaveBeenCalledOnce();
   });
@@ -444,14 +463,45 @@ describe("GestureTargeting toolbar requests", () => {
     zoomToolbar.editing.activeWidgetId = file;
     zoomToolbar.targeting.requestFitAll();
 
-    expect(zoomToolbar.targeting.takeIntents(0)).toMatchObject({
-      endEditing: "zoom",
-      pendingGesture: undefined,
-    });
+    expect(zoomToolbar.targeting.editingExitRequested).toBe(true);
+    zoomToolbar.targeting.takeIntents(0);
   });
 });
 
-describe("GestureTargeting minimap double click", () => {
+describe("GestureTargeting double click", () => {
+  it("begins editing on a Text body with its content point", () => {
+    const harness = createHarness();
+    harness.hit = {
+      zone: "body",
+      widgetId: file,
+      contentX: 42,
+      contentY: 84,
+    };
+
+    harness.targeting.doubleClick({ offsetX: 10, offsetY: 20 });
+
+    expect(harness.targeting.takeIntents(0)).toMatchObject({
+      beginEditingWidgetId: file,
+      beginEditingContentX: 42,
+      beginEditingContentY: 84,
+      zoomToWidgetId: undefined,
+    });
+  });
+
+  it("does not begin editing from a Text header or empty canvas", () => {
+    for (const zone of ["header", "empty"] as const) {
+      const harness = createHarness();
+      harness.hit = zone === "header" ? { zone, widgetId: file } : { zone };
+
+      harness.targeting.doubleClick({ offsetX: 10, offsetY: 20 });
+
+      expect(harness.targeting.takeIntents(0)).toMatchObject({
+        beginEditingWidgetId: undefined,
+        zoomToWidgetId: undefined,
+      });
+    }
+  });
+
   it("zooms to a minimap widget once", () => {
     const harness = createHarness();
     harness.detailLevel = "minimap";
@@ -461,20 +511,14 @@ describe("GestureTargeting minimap double click", () => {
 
     expect(harness.targeting.takeIntents(0)).toMatchObject({
       zoomToWidgetId: file,
+      beginEditingWidgetId: undefined,
     });
     expect(harness.targeting.takeIntents(0)).toMatchObject({
       zoomToWidgetId: undefined,
     });
   });
 
-  it("does not zoom at text or on empty minimap space", () => {
-    const text = createHarness();
-    text.hit = { zone: "body", widgetId: file };
-    text.targeting.doubleClick({ offsetX: 10, offsetY: 20 });
-    expect(text.targeting.takeIntents(0)).toMatchObject({
-      zoomToWidgetId: undefined,
-    });
-
+  it("does not zoom on empty minimap space", () => {
     const empty = createHarness();
     empty.detailLevel = "minimap";
     empty.targeting.doubleClick({ offsetX: 10, offsetY: 20 });
@@ -493,9 +537,9 @@ describe("GestureTargeting metrics shortcut", () => {
       key({ code: "KeyM", shiftKey: true, preventDefault }),
     );
 
+    expect(harness.targeting.editingExitRequested).toBe(false);
     expect(harness.targeting.takeIntents(0)).toMatchObject({
       toggleMetricsOverlay: true,
-      endEditing: undefined,
     });
     expect(harness.targeting.takeIntents(0)).toMatchObject({
       toggleMetricsOverlay: false,
@@ -522,10 +566,10 @@ describe("GestureTargeting pointer targets", () => {
       harness.targeting.pointerUp(pointer());
     }
 
+    expect(harness.targeting.editingExitRequested).toBe(false);
     expect(harness.targeting.takeIntents(0)).toMatchObject({
       panX: 0,
       panY: 0,
-      endEditing: undefined,
     });
   });
 

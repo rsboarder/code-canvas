@@ -3,6 +3,7 @@ precision highp float;
 precision highp sampler2DArray;
 uniform sampler2DArray minimap;
 uniform sampler2D palette;
+uniform float alpha;
 uniform float devicePixelRatio;
 uniform float cameraScale;
 in vec2 uv;
@@ -21,5 +22,5 @@ void main() {
   if (outsideFrame) discard;
   float paletteIndex = texture(minimap, vec3(uv, layerOut)).r;
   int index = int(floor(paletteIndex * 255.0 + 0.5));
-  color = vec4(texture(palette, vec2((float(index) + 0.5) / 256.0, 0.5)).rgb, 1.0);
+  color = vec4(texture(palette, vec2((float(index) + 0.5) / 256.0, 0.5)).rgb, alpha);
 }

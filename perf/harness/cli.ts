@@ -2,13 +2,9 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { stdin } from "node:process";
 
 import { updateBaseline } from "./baseline";
+import { loadBudgetConfig } from "./budget-config";
 import { classifyTraceFile, formatTraceClassification } from "./classify-file";
-import {
-  loadBudgetConfig,
-  runHarness,
-  runSelfTest,
-  type HarnessOptions,
-} from "./runner";
+import { runHarness, runSelfTest, type HarnessOptions } from "./runner";
 
 export type CliCommand =
   "run" | "stages" | "self-test" | "baseline" | "classify";

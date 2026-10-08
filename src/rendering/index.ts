@@ -15,7 +15,6 @@ export {
   calculateBaseline,
   createAdvanceCache,
   createTextMetrics,
-  isWhitespaceCluster,
   roundMetric,
 } from "./text/text-metrics";
 export type {
@@ -24,3 +23,5 @@ export type {
   TextMetricsProbeLine,
 } from "./text/text-metrics";
 export { WebGlRenderer } from "./webgl-renderer";
+export type { FrameMetrics } from "./frame-loop";
+export type { FrameTileMetrics, TileDemand } from "./scene/tile-residency";
